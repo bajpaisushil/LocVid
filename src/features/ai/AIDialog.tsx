@@ -23,8 +23,16 @@ import { SCENE_TEMPLATES } from './sceneTemplates'
 
 type Tab = 'scenes' | 'motion' | 'images' | 'device'
 
-export function AIDialog({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
-  const [tab, setTab] = useState<Tab>('scenes')
+export function AIDialog({
+  open,
+  onOpenChange,
+  initialTab = 'scenes',
+}: {
+  open: boolean
+  onOpenChange(open: boolean): void
+  initialTab?: Tab
+}) {
+  const [tab, setTab] = useState<Tab>(initialTab)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="grid max-h-[88vh] grid-rows-[auto_auto_minmax(0,1fr)] sm:max-w-3xl" data-testid="ai-dialog">

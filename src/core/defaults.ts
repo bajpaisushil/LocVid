@@ -5,7 +5,9 @@ import {
   type AssetMeta,
   type AudioRole,
   type AudioTrack,
+  type CinematicSettings,
   type GeneratedBackground,
+  type LookSettings,
   type GeneratedStyle,
   type MediaBackground,
   type MotionSettings,
@@ -61,6 +63,18 @@ export function defaultMotion(forKind: 'image' | 'video' | 'generated'): MotionS
     : { preset: 'none', intensity: 0.5, easing: 'easeInOut' }
 }
 
+export function defaultCinematic(): CinematicSettings {
+  return { enabled: false, camera: 'dollyIn', intensity: 0.5, focus: 'none', animateSky: true, foliage: false, haze: 0 }
+}
+
+export function defaultLook(): LookSettings {
+  return { grade: 'none', atmosphere: 'none', grain: 0, vignette: 0, bloom: 0, letterbox: false }
+}
+
+export function lookIsNeutral(look: LookSettings): boolean {
+  return look.grade === 'none' && look.atmosphere === 'none' && look.grain <= 0 && look.vignette <= 0 && look.bloom <= 0 && !look.letterbox
+}
+
 export function defaultTransition(isFirst: boolean): TransitionSettings {
   return isFirst ? { type: 'none', duration: 0.6 } : { type: 'crossfade', duration: 0.6 }
 }
@@ -90,6 +104,8 @@ export function createScene(options: CreateSceneOptions = {}): Scene {
         ? createMediaBackground(asset)
         : createGeneratedBackground('linear', paletteFor(index), hashString(id)),
     motion: defaultMotion(kind),
+    cinematic: defaultCinematic(),
+    look: defaultLook(),
     transition: defaultTransition(index === 0),
     overlays: options.overlays ?? [],
     audio: null,

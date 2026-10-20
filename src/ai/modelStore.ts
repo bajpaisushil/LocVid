@@ -1,4 +1,4 @@
-import { fileUrl, modelBytes, type ImageModel } from './models'
+import { fileUrl, modelBytes, type ModelManifest } from './models'
 
 /**
  * Model files live in Cache Storage (separate from projects), downloaded only
@@ -20,7 +20,7 @@ function hasCacheStorage(): boolean {
   return typeof caches !== 'undefined'
 }
 
-export async function downloadedFiles(model: ImageModel): Promise<Set<string>> {
+export async function downloadedFiles(model: ModelManifest): Promise<Set<string>> {
   const present = new Set<string>()
   if (!hasCacheStorage()) return present
   const cache = await caches.open(CACHE_NAME)
@@ -30,12 +30,12 @@ export async function downloadedFiles(model: ImageModel): Promise<Set<string>> {
   return present
 }
 
-export async function isModelDownloaded(model: ImageModel): Promise<boolean> {
+export async function isModelDownloaded(model: ModelManifest): Promise<boolean> {
   return (await downloadedFiles(model)).size === model.files.length
 }
 
 /** Bytes still to download (resumes per file). */
-export async function remainingBytes(model: ImageModel): Promise<number> {
+export async function remainingBytes(model: ModelManifest): Promise<number> {
   const present = await downloadedFiles(model)
   return model.files.filter((f) => !present.has(f.path)).reduce((n, f) => n + f.bytes, 0)
 }
@@ -47,7 +47,7 @@ export class ModelDownloadError extends Error {
   }
 }
 
-export async function downloadModel(model: ImageModel, onProgress: (p: DownloadProgress) => void, signal: AbortSignal): Promise<void> {
+export async function downloadModel(model: ModelManifest, onProgress: (p: DownloadProgress) => void, signal: AbortSignal): Promise<void> {
   if (!hasCacheStorage()) throw new ModelDownloadError('This browser does not support Cache Storage, so models cannot be stored.')
   const cache = await caches.open(CACHE_NAME)
   const total = modelBytes(model)
@@ -109,14 +109,14 @@ export async function downloadModel(model: ImageModel, onProgress: (p: DownloadP
   }
 }
 
-export async function deleteModel(model: ImageModel): Promise<void> {
+export async function deleteModel(model: ModelManifest): Promise<void> {
   if (!hasCacheStorage()) return
   const cache = await caches.open(CACHE_NAME)
   for (const file of model.files) await cache.delete(fileUrl(model, file))
 }
 
 /** Read a cached model file (used by the generation worker). */
-export async function readModelFile(model: ImageModel, path: string): Promise<Response> {
+export async function readModelFile(model: ModelManifest, path: string): Promise<Response> {
   const file = model.files.find((f) => f.path === path)
   if (!file) throw new Error(`Unknown model file ${path}`)
   const cache = await caches.open(CACHE_NAME)

@@ -8,6 +8,7 @@ import type { AssetMeta, Project } from '@/core/types'
  *  assets    – asset metadata + a small JPEG thumbnail
  *  blobs     – the original media files, keyed by asset ID (large, never inlined in projects)
  *  posters   – a small rendered preview frame per project for the home screen
+ *  analysis  – per-image results of on-device vision models (depth maps), computed once
  *  kv        – app preferences (e.g. which optional AI models were downloaded)
  *
  * Nothing here is encrypted, and it lives only in this browser profile:
@@ -19,16 +20,44 @@ export interface StoredAsset {
   thumbnail: Blob | null
 }
 
+/** Depth analysis of an image asset (from Depth Anything V2, on device). */
+export interface DepthAnalysis {
+  assetId: string
+  width: number
+  height: number
+  /** Normalized disparity, row-major Uint16 (65535 = nearest). */
+  depth: ArrayBuffer
+  /** Uint8 mask: 1 where the far region connected to the top edge (sky / distance). */
+  far: ArrayBuffer
+  /** Typical disparity (0..1) of the main subject, used as the camera's pivot. */
+  subject: number
+  /** Normalized [x, y, w, h] of the main subject, for framing close-ups. */
+  subjectBox: [number, number, number, number]
+  /** Background layer behind foreground edges (revealed when the camera moves): RGBA8 color… */
+  fill: ArrayBuffer
+  /** …its depth (Uint16)… */
+  bgDepth: ArrayBuffer
+  /** …and where it differs from the original (Uint8). */
+  hole: ArrayBuffer
+  /** Bumped when the analysis format changes; older records are recomputed. */
+  version: number
+  model: string
+  createdAt: number
+}
+
+export const DEPTH_ANALYSIS_VERSION = 3
+
 export interface LocVidDB extends DBSchema {
   projects: { key: string; value: Project; indexes: { 'by-updated': number } }
   assets: { key: string; value: StoredAsset; indexes: { 'by-fingerprint': string } }
   blobs: { key: string; value: Blob }
   posters: { key: string; value: Blob }
   kv: { key: string; value: unknown }
+  analysis: { key: string; value: DepthAnalysis }
 }
 
 export const DB_NAME = 'locvid'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 let dbPromise: Promise<IDBPDatabase<LocVidDB>> | null = null
 
@@ -80,6 +109,8 @@ export function getDB(): Promise<IDBPDatabase<LocVidDB>> {
         if (!db.objectStoreNames.contains('blobs')) db.createObjectStore('blobs')
         if (!db.objectStoreNames.contains('posters')) db.createObjectStore('posters')
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv')
+        // v2: depth analysis results.
+        if (!db.objectStoreNames.contains('analysis')) db.createObjectStore('analysis', { keyPath: 'assetId' })
       },
       blocking() {
         // Another tab wants a newer schema: close so it can upgrade.

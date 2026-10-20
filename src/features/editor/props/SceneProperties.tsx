@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { controlsFromCrop, cropFromControls } from '@/render/fit'
 import { useEditorStore, useProject } from '@/state/editorStore'
 import { ColorField, Field, NumberField, SegmentedField, SelectField, Section, SliderField, SwitchField } from '../fields'
+import { LookSection, MotionControls } from './CinematicControls'
 import { OverlayEditor } from './OverlayEditor'
 import { MOTION_OPTIONS, TEXT_PRESETS, TRANSITION_OPTIONS, useSceneUpdate } from './shared'
 
@@ -324,6 +325,8 @@ export function SceneProperties({ sceneId, overlayId }: { sceneId: string; overl
           <p className="text-[11px] text-muted-foreground">Generated backgrounds animate on their own. Camera motion applies to images and video.</p>
         ) : (
           <>
+            <MotionControls scene={scene} isImage={media?.kind === 'image'} />
+            {scene.cinematic.enabled && media?.kind === 'image' ? null : (
             <SelectField<MotionPreset>
               label="Camera"
               value={scene.motion.preset}
@@ -331,7 +334,8 @@ export function SceneProperties({ sceneId, overlayId }: { sceneId: string; overl
               onChange={(preset) => update((s) => void (s.motion.preset = preset))}
               testId="motion-preset"
             />
-            {scene.motion.preset !== 'none' ? (
+            )}
+            {scene.motion.preset !== 'none' && !(scene.cinematic.enabled && media?.kind === 'image') ? (
               <>
                 <SliderField
                   label="Intensity"
@@ -352,6 +356,8 @@ export function SceneProperties({ sceneId, overlayId }: { sceneId: string; overl
           </>
         )}
       </Section>
+
+      <LookSection scene={scene} />
 
       <Section
         title={`Text (${scene.overlays.length})`}

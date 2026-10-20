@@ -1,6 +1,6 @@
 import { parseAssetMeta, parseProject } from '@/core/schema'
 import type { AssetMeta, Project } from '@/core/types'
-import { StorageError, withStorage, type StoredAsset } from './db'
+import { DEPTH_ANALYSIS_VERSION, StorageError, withStorage, type DepthAnalysis, type StoredAsset } from './db'
 
 // ---------------------------------------------------------------------------
 // Projects
@@ -128,7 +128,7 @@ export async function updateAssetMeta(meta: AssetMeta): Promise<void> {
  */
 export async function collectGarbage(): Promise<{ removed: number; freedBytes: number }> {
   return withStorage(async (db) => {
-    const tx = db.transaction(['projects', 'assets', 'blobs'], 'readwrite')
+    const tx = db.transaction(['projects', 'assets', 'blobs', 'analysis'], 'readwrite')
     const projects = await tx.objectStore('projects').getAll()
     const referenced = new Set<string>()
     for (const p of projects) {
@@ -144,6 +144,7 @@ export async function collectGarbage(): Promise<{ removed: number; freedBytes: n
       removed += 1
       await assetStore.delete(record.meta.id)
       await blobStore.delete(record.meta.id)
+      await tx.objectStore('analysis').delete(record.meta.id)
     }
     // Orphaned blobs without metadata (e.g. an interrupted import).
     for (const key of await blobStore.getAllKeys()) {
@@ -151,6 +152,26 @@ export async function collectGarbage(): Promise<{ removed: number; freedBytes: n
     }
     await tx.done
     return { removed, freedBytes }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Vision analysis (depth maps)
+// ---------------------------------------------------------------------------
+
+export async function putAnalysis(record: DepthAnalysis): Promise<void> {
+  await withStorage((db) => db.put('analysis', record))
+}
+
+export async function getAnalyses(assetIds: readonly string[]): Promise<Map<string, DepthAnalysis>> {
+  return withStorage(async (db) => {
+    const tx = db.transaction('analysis', 'readonly')
+    const rows = await Promise.all(assetIds.map((id) => tx.store.get(id)))
+    await tx.done
+    const out = new Map<string, DepthAnalysis>()
+    // Records in an older format are ignored (and recomputed on demand).
+    for (const row of rows) if (row && row.version === DEPTH_ANALYSIS_VERSION) out.set(row.assetId, row)
+    return out
   })
 }
 

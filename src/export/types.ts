@@ -1,4 +1,5 @@
 import type { AssetMeta, Project } from '@/core/types'
+import type { DepthAnalysis } from '@/storage/db'
 
 export type ExportEngine = 'webcodecs' | 'ffmpeg'
 export type EnginePreference = 'auto' | ExportEngine
@@ -71,6 +72,8 @@ export interface RenderJob {
   project: Project
   assets: Record<string, AssetMeta>
   blobs: Record<string, Blob>
+  /** Depth maps for images in cinematic (3D motion) scenes. */
+  depths: Record<string, DepthAnalysis>
   settings: ExportSettings
   /** Final mixed audio (planar), or null for a silent track. */
   audio: { channels: Float32Array[]; sampleRate: number } | null

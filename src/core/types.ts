@@ -131,6 +131,53 @@ export interface MotionSettings {
   easing: Easing
 }
 
+/** Camera moves for depth-based ("2.5D") cinematic motion. */
+export type CameraMove =
+  | 'dollyIn'
+  | 'dollyOut'
+  | 'orbitLeft'
+  | 'orbitRight'
+  | 'craneUp'
+  | 'craneDown'
+  | 'truckLeft'
+  | 'truckRight'
+  | 'float'
+  | 'vertigo'
+
+export type FocusMode = 'none' | 'subject' | 'rack'
+
+/**
+ * Cinematic 3D motion for photo backgrounds: an on-device depth model turns
+ * the still into a depth map, and a WebGL renderer moves a virtual camera
+ * through it with real parallax and occlusion.
+ */
+export interface CinematicSettings {
+  enabled: boolean
+  camera: CameraMove
+  /** 0..1 — how far the camera travels. */
+  intensity: number
+  focus: FocusMode
+  /** Slow drift of the farthest region (sky, distant water). */
+  animateSky: boolean
+  /** Gentle sway of vegetation. */
+  foliage: boolean
+  /** 0..1 atmospheric depth haze. */
+  haze: number
+}
+
+export type Atmosphere = 'none' | 'dust' | 'snow' | 'rain' | 'fireflies' | 'embers' | 'sparkles'
+export type GradePreset = 'none' | 'cinematic' | 'warm' | 'cool' | 'vivid' | 'noir' | 'vintage' | 'dreamy'
+
+/** Film look applied to a scene's picture (below its text): grade, particles, lens. */
+export interface LookSettings {
+  grade: GradePreset
+  atmosphere: Atmosphere
+  grain: number
+  vignette: number
+  bloom: number
+  letterbox: boolean
+}
+
 export type TransitionType =
   | 'none'
   | 'crossfade'
@@ -202,6 +249,8 @@ export interface Scene {
   duration: number
   background: SceneBackground
   motion: MotionSettings
+  cinematic: CinematicSettings
+  look: LookSettings
   transition: TransitionSettings
   overlays: TextOverlay[]
   audio: SceneAudio | null

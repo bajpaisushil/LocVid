@@ -53,6 +53,7 @@ export async function runWebCodecsPipeline(job: RenderJob, env: PipelineEnv, hoo
     timeline,
     assets: job.assets,
     blobs: job.blobs,
+    depths: job.depths,
     fps,
     width,
     height,
@@ -127,7 +128,9 @@ export async function runWebCodecsPipeline(job: RenderJob, env: PipelineEnv, hoo
     await output.finalize()
     const buffer = output.target.buffer
     if (!buffer || buffer.byteLength === 0) throw new ExportError('codec', 'The encoder produced an empty file.')
-    return { buffer, warnings: sources.warnings, videoCodec, audioCodec }
+    const warnings = [...sources.warnings]
+    if (compositor.cinematicFallback) warnings.push('WebGL was unavailable for some cinematic effects, so they were rendered as plain 2D motion.')
+    return { buffer, warnings, videoCodec, audioCodec }
   } catch (error) {
     if (output.state !== 'finalized' && output.state !== 'canceled') await output.cancel().catch(() => undefined)
     throw error

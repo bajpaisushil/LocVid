@@ -82,7 +82,10 @@ export const MAGENTA: [number, number, number] = [224, 24, 224]
 
 /** Seek the preview with the editor's keyboard shortcuts (Home, then Shift+→ per second). */
 export async function seekTo(page: Page, seconds: number) {
-  // Leave any text field so the editor's keyboard shortcuts apply.
+  // A closing select hands focus back to its trigger after its exit animation; wait for that
+  // first, then leave any control so the editor's keyboard shortcuts apply.
+  await expect(page.getByRole('listbox')).toHaveCount(0)
+  await page.waitForTimeout(250)
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Home')
   for (let i = 0; i < Math.floor(seconds); i++) await page.keyboard.press('Shift+ArrowRight')

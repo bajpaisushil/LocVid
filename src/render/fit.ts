@@ -76,3 +76,17 @@ export function controlsFromCrop(crop: CropRect, srcW: number, srcH: number, fra
   const focusY = srcH - r.height > 1 ? r.y / (srcH - r.height) : 0.5
   return { zoom, focusX: clamp(focusX, 0, 1), focusY: clamp(focusY, 0, 1) }
 }
+
+/**
+ * A frame-aspect crop (normalized) of `zoom`× magnification centered as close
+ * to `center` (normalized) as the image allows — used to frame shots from a
+ * single photo (wide, medium, close-up) around its subject.
+ */
+export function cropAround(center: { x: number; y: number }, zoom: number, srcW: number, srcH: number, frameAspect: number): CropRect {
+  const base = baseSize(srcW, srcH, frameAspect)
+  const w = base.w / Math.max(1, zoom)
+  const h = base.h / Math.max(1, zoom)
+  const cx = clamp(center.x * srcW, w / 2, srcW - w / 2)
+  const cy = clamp(center.y * srcH, h / 2, srcH - h / 2)
+  return { x: (cx - w / 2) / srcW, y: (cy - h / 2) / srcH, width: w / srcW, height: h / srcH }
+}

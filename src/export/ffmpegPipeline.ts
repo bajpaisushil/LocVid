@@ -65,6 +65,7 @@ export async function runFFmpegPipeline(job: RenderJob, hooks: FFmpegHooks): Pro
     timeline,
     assets: job.assets,
     blobs: job.blobs,
+    depths: job.depths,
     fps,
     width,
     height,
@@ -139,7 +140,9 @@ export async function runFFmpegPipeline(job: RenderJob, hooks: FFmpegHooks): Pro
     )
     const data = await ffmpeg.readFile('out.mp4')
     if (typeof data === 'string' || data.byteLength === 0) throw new ExportError('ffmpeg', 'FFmpeg produced an empty file.')
-    return { blob: new Blob([data as BlobPart], { type: 'video/mp4' }), warnings: sources.warnings }
+    const warnings = [...sources.warnings]
+    if (compositor.cinematicFallback) warnings.push('WebGL was unavailable for some cinematic effects, so they were rendered as plain 2D motion.')
+    return { blob: new Blob([data as BlobPart], { type: 'video/mp4' }), warnings }
   } finally {
     sources.dispose()
     compositor.dispose()

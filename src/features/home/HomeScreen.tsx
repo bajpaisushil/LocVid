@@ -13,6 +13,7 @@ import { downloadBlob, safeFileName } from '@/lib/download'
 import { errorMessage } from '@/lib/errors'
 import { collectGarbage, deleteProject, listProjects, renameProject, saveProject } from '@/storage/repo'
 import { NewProjectDialog } from './NewProjectDialog'
+import { PromptHero } from './PromptHero'
 import { ProjectCard } from './ProjectCard'
 import { buildProjectFile, duplicateProject, importProjectFile } from './projectFile'
 import { StorageCard } from './StorageCard'
@@ -146,6 +147,9 @@ export function HomeScreen() {
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
+        <div className="mb-8">
+          <PromptHero />
+        </div>
         {state.status === 'loading' ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-busy="true" aria-label="Loading projects">
             {Array.from({ length: 3 }, (_, i) => (
@@ -178,7 +182,7 @@ export function HomeScreen() {
                   <Clapperboard className="size-7 text-white" />
                 </span>
               </EmptyMedia>
-              <EmptyTitle className="text-lg">Make your first video</EmptyTitle>
+              <EmptyTitle className="text-lg">Or start from your own media</EmptyTitle>
               <EmptyDescription>
                 Turn photos, clips, a script and music into a polished MP4 — edited and rendered entirely on this device.
               </EmptyDescription>
@@ -195,7 +199,7 @@ export function HomeScreen() {
         ) : (
           <>
             <div className="mb-4 flex items-baseline justify-between">
-              <h1 className="text-xl font-semibold tracking-tight">Projects</h1>
+              <h2 className="text-xl font-semibold tracking-tight">Projects</h2>
               <span className="text-sm text-muted-foreground">{projects.length} saved in this browser</span>
             </div>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="project-grid">

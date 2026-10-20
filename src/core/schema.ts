@@ -80,6 +80,32 @@ const motionSchema = z
   })
   .catch({ preset: 'none', intensity: 0.5, easing: 'easeInOut' })
 
+const cinematicSchema = z
+  .object({
+    enabled: bool(false),
+    camera: enumOf(
+      ['dollyIn', 'dollyOut', 'orbitLeft', 'orbitRight', 'craneUp', 'craneDown', 'truckLeft', 'truckRight', 'float', 'vertigo'],
+      'dollyIn',
+    ),
+    intensity: num(0, 1, 0.5),
+    focus: enumOf(['none', 'subject', 'rack'], 'none'),
+    animateSky: bool(true),
+    foliage: bool(false),
+    haze: num(0, 1, 0),
+  })
+  .catch({ enabled: false, camera: 'dollyIn', intensity: 0.5, focus: 'none', animateSky: true, foliage: false, haze: 0 })
+
+const lookSchema = z
+  .object({
+    grade: enumOf(['none', 'cinematic', 'warm', 'cool', 'vivid', 'noir', 'vintage', 'dreamy'], 'none'),
+    atmosphere: enumOf(['none', 'dust', 'snow', 'rain', 'fireflies', 'embers', 'sparkles'], 'none'),
+    grain: num(0, 1, 0),
+    vignette: num(0, 1, 0),
+    bloom: num(0, 1, 0),
+    letterbox: bool(false),
+  })
+  .catch({ grade: 'none', atmosphere: 'none', grain: 0, vignette: 0, bloom: 0, letterbox: false })
+
 const transitionSchema = z
   .object({
     type: enumOf(
@@ -153,6 +179,8 @@ const sceneSchema = z.object({
   duration: num(MIN_SCENE_DURATION, MAX_SCENE_DURATION, 5),
   background: backgroundSchema,
   motion: motionSchema,
+  cinematic: cinematicSchema,
+  look: lookSchema,
   transition: transitionSchema,
   overlays: z.array(overlaySchema).max(50),
   audio: sceneAudioSchema,

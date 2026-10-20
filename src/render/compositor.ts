@@ -1,3 +1,4 @@
+import { lookIsNeutral } from '@/core/defaults'
 import { frameAt, motionProgress, videoSourceTime, type Timeline, type TimelineEntry } from '@/core/timeline'
 import type { MediaBackground, Project, TransitionType } from '@/core/types'
 import { hashString } from '@/lib/id'
@@ -5,6 +6,8 @@ import { clamp } from '@/lib/math'
 import { ease } from './easing'
 import { containRect, coverRect, cropSourceRect, type Rect } from './fit'
 import { drawGenerated } from './generated'
+import { cameraAt as cinematicCamera, focusAt } from './cinematic/camera'
+import { CinematicGL } from './cinematic/CinematicGL'
 import { applyCamera, cameraAt, parallaxCameras, type Camera } from './motion'
 import { drawOverlay } from './text'
 import { get2d, type AnyCanvas, type CanvasFactory, type Ctx2D, type FrameSources, type SourceImage } from './types'
@@ -20,6 +23,11 @@ export interface RenderOptions {
   placeholders?: boolean
 }
 
+export interface CompositorOptions {
+  /** Allow WebGL cinematic rendering (depth parallax, film looks). Default true. */
+  cinematic?: boolean
+}
+
 /** Tiny canvas used for the cheap, portable blur (downscale → smooth upscale). Long side in px. */
 const BLUR_RES = 40
 
@@ -33,9 +41,22 @@ export class Compositor {
   private blur: [AnyCanvas, Ctx2D] | null = null
 
   private readonly createCanvas: CanvasFactory
+  private readonly allowCinematic: boolean
+  /** undefined = not created yet; null = WebGL2 unavailable (2D fallback). */
+  private gl: CinematicGL | null | undefined
+  /** True once a cinematic effect had to fall back to 2D (reported as an export warning). */
+  cinematicFallback = false
 
-  constructor(createCanvas: CanvasFactory) {
+  constructor(createCanvas: CanvasFactory, options: CompositorOptions = {}) {
     this.createCanvas = createCanvas
+    this.allowCinematic = options.cinematic ?? true
+  }
+
+  private cinematic(): CinematicGL | null {
+    if (!this.allowCinematic) return null
+    if (this.gl === undefined) this.gl = CinematicGL.create(this.createCanvas)
+    if (this.gl && !this.gl.available) this.gl = null
+    return this.gl
   }
 
   private layer(index: number, w: number, h: number): Ctx2D {
@@ -60,6 +81,8 @@ export class Compositor {
   }
 
   dispose(): void {
+    this.gl?.dispose()
+    this.gl = undefined
     for (const [canvas] of this.layers) {
       canvas.width = 0
       canvas.height = 0
@@ -111,12 +134,54 @@ export class Compositor {
     ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, w, h)
     const bg = scene.background
+    const sceneTime = localTime + entry.inDuration / 2
+    let lookDone = false
     if (bg.kind === 'generated') {
-      drawGenerated(ctx, bg, w, h, localTime + entry.inDuration / 2)
+      drawGenerated(ctx, bg, w, h, sceneTime)
     } else {
       const source = this.mediaFor(entry, bg, localTime, input.sources)
-      if (source) this.drawMedia(ctx, entry, bg, source, localTime, w, h)
-      else if (options.placeholders) drawPlaceholder(ctx, w, h)
+      const isImage = input.sources.videoDuration(bg.assetId) === undefined
+      const depth = scene.cinematic.enabled && isImage ? input.sources.depth(bg.assetId) : null
+      const gl = depth && source ? this.cinematic() : null
+      if (source && depth && gl) {
+        // Cinematic 3D: depth-parallax camera move, living elements, film look — on the GPU.
+        const progress = motionProgress(entry, localTime)
+        const camera = cinematicCamera({
+          move: scene.cinematic.camera,
+          intensity: scene.cinematic.intensity,
+          progress,
+          subject: depth.subject,
+          seed: hashString(scene.id),
+        })
+        gl.renderShot({
+          width: w,
+          height: h,
+          image: { source: source.source as TexImageSource, width: source.width, height: source.height },
+          depth,
+          camera,
+          time: sceneTime,
+          settings: scene.cinematic,
+          focus: focusAt(scene.cinematic, depth.subject, progress),
+          look: scene.look,
+          crop: bg.fit === 'crop' ? normalizedCrop(bg, source, w / h) : undefined,
+        })
+        ctx.drawImage(gl.canvas, 0, 0, w, h)
+        lookDone = true
+      } else if (source) {
+        if (scene.cinematic.enabled && isImage) this.cinematicFallback = true
+        this.drawMedia(ctx, entry, bg, source, localTime, w, h)
+      } else if (options.placeholders) {
+        drawPlaceholder(ctx, w, h)
+      }
+    }
+    if (!lookDone && !lookIsNeutral(scene.look)) {
+      const gl = this.cinematic()
+      if (gl) {
+        gl.renderLook({ width: w, height: h, source: ctx.canvas, time: sceneTime, look: scene.look })
+        ctx.drawImage(gl.canvas, 0, 0, w, h)
+      } else {
+        this.cinematicFallback = true
+      }
     }
     for (const overlay of scene.overlays) drawOverlay(ctx, overlay, entry, localTime, w, h)
     ctx.restore()
@@ -224,6 +289,12 @@ export class Compositor {
     ctx.drawImage(logo.source, x, y, lw, lh)
     ctx.restore()
   }
+}
+
+/** A crop in normalized image coordinates with exactly the frame's aspect ratio. */
+function normalizedCrop(bg: MediaBackground, src: SourceImage, frameAspect: number) {
+  const r = cropSourceRect(bg.crop, src.width, src.height, frameAspect)
+  return { x: r.x / src.width, y: r.y / src.height, width: r.width / src.width, height: r.height / src.height }
 }
 
 function drawSub(ctx: Ctx2D, src: SourceImage, s: Rect, d: Rect) {

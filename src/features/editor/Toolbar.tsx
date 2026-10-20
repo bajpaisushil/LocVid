@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowLeft, Check, Clapperboard, Download, Loader2, Redo2, Sparkles, Undo2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Check, Clapperboard, Download, Loader2, Redo2, Sparkles, Undo2, Wand2 } from 'lucide-react'
 import { useState } from 'react'
 import { navigate } from '@/app/router'
 import { Badge } from '@/components/ui/badge'
@@ -115,12 +115,13 @@ function SaveIndicator() {
 }
 
 export interface ToolbarProps {
+  onOpenPrompt(): void
   onOpenStoryboard(): void
   onOpenAI(): void
   onExport(): void
 }
 
-export function Toolbar({ onOpenStoryboard, onOpenAI, onExport }: ToolbarProps) {
+export function Toolbar({ onOpenPrompt, onOpenStoryboard, onOpenAI, onExport }: ToolbarProps) {
   const project = useProject()
   const canUndo = useEditorStore((s) => s.past.length > 0)
   const canRedo = useEditorStore((s) => s.future.length > 0)
@@ -161,6 +162,9 @@ export function Toolbar({ onOpenStoryboard, onOpenAI, onExport }: ToolbarProps) 
             {over ? 'Over the 5-minute limit — shorten scenes to export.' : 'Total length (limit 5:00)'}
           </TooltipContent>
         </Tooltip>
+        <Button variant="secondary" onClick={onOpenPrompt} data-testid="open-prompt">
+          <Wand2 /> <span className="hidden md:inline">Describe video</span>
+        </Button>
         <Button variant="ghost" onClick={onOpenStoryboard} data-testid="open-storyboard">
           <Clapperboard /> <span className="hidden lg:inline">Script to storyboard</span>
         </Button>

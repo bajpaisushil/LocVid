@@ -1,8 +1,8 @@
 import type * as OrtTypes from 'onnxruntime-web'
 import { createRng } from '@/lib/math'
 import { ClipTokenizer } from './clipTokenizer'
-import { SD_TURBO } from './models'
-import { readModelFile } from './modelStore'
+import { SD_TURBO } from '../models'
+import { readModelFile } from '../modelStore'
 
 /**
  * SD-Turbo text-to-image on WebGPU via ONNX Runtime Web, in a worker so the

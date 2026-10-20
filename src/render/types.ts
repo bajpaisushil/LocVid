@@ -4,6 +4,8 @@
  * only touches APIs available in both: canvas 2D, ImageBitmap, VideoFrame,
  * OffscreenCanvas.
  */
+import type { DepthAnalysis } from '@/storage/db'
+
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 export type AnyCanvas = HTMLCanvasElement | OffscreenCanvas
 
@@ -23,6 +25,8 @@ export interface FrameSources {
   videoFrame(sceneId: string, assetId: string, sourceTime: number): SourceImage | null
   /** Duration of a video asset in seconds, if known. */
   videoDuration(assetId: string): number | undefined
+  /** Depth analysis for an image asset (enables cinematic 3D motion), if computed. */
+  depth(assetId: string): DepthAnalysis | null
 }
 
 export type CanvasFactory = (width: number, height: number) => AnyCanvas

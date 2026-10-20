@@ -1,5 +1,5 @@
 import type { Draft } from 'immer'
-import type { MotionPreset, Scene, TextStylePreset, TransitionType } from '@/core/types'
+import type { Atmosphere, CameraMove, GradePreset, MotionPreset, Scene, TextStylePreset, TransitionType } from '@/core/types'
 import { useEditorStore } from '@/state/editorStore'
 
 export const TEXT_PRESETS: { value: TextStylePreset; label: string; sample: string }[] = [
@@ -49,3 +49,37 @@ export const TRANSITION_OPTIONS: { value: TransitionType; label: string }[] = [
   { value: 'zoom', label: 'Zoom through' },
 ]
 
+
+export const CAMERA_OPTIONS: { value: CameraMove; label: string }[] = [
+  { value: 'dollyIn', label: 'Dolly in (push toward subject)' },
+  { value: 'dollyOut', label: 'Dolly out (pull back)' },
+  { value: 'orbitRight', label: 'Orbit right (around subject)' },
+  { value: 'orbitLeft', label: 'Orbit left' },
+  { value: 'craneUp', label: 'Crane up' },
+  { value: 'craneDown', label: 'Crane down' },
+  { value: 'truckRight', label: 'Track right (sideways)' },
+  { value: 'truckLeft', label: 'Track left' },
+  { value: 'float', label: 'Handheld float' },
+  { value: 'vertigo', label: 'Dolly zoom (vertigo)' },
+]
+
+export const GRADE_OPTIONS: { value: GradePreset; label: string }[] = [
+  { value: 'none', label: 'Original' },
+  { value: 'cinematic', label: 'Cinematic (teal & orange)' },
+  { value: 'warm', label: 'Warm' },
+  { value: 'cool', label: 'Cool' },
+  { value: 'vivid', label: 'Vivid' },
+  { value: 'dreamy', label: 'Dreamy' },
+  { value: 'vintage', label: 'Vintage film' },
+  { value: 'noir', label: 'Noir (black & white)' },
+]
+
+export const ATMOSPHERE_OPTIONS: { value: Atmosphere; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'dust', label: 'Floating dust' },
+  { value: 'snow', label: 'Snow' },
+  { value: 'rain', label: 'Rain' },
+  { value: 'fireflies', label: 'Fireflies' },
+  { value: 'embers', label: 'Embers' },
+  { value: 'sparkles', label: 'Sparkles' },
+]

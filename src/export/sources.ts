@@ -1,6 +1,7 @@
 import { frameAt, frameCount, videoSourceTime, type Timeline, type TimelineEntry } from '@/core/timeline'
 import type { AssetMeta, Project } from '@/core/types'
 import type { FrameSources, SourceImage } from '@/render/types'
+import type { DepthAnalysis } from '@/storage/db'
 import { ExportError } from './types'
 
 /**
@@ -28,6 +29,7 @@ export interface ExportSourcesOptions {
   timeline: Timeline
   assets: Record<string, AssetMeta>
   blobs: Record<string, Blob>
+  depths: Record<string, DepthAnalysis>
   fps: number
   width: number
   height: number
@@ -62,6 +64,10 @@ export class ExportSources implements FrameSources {
   videoDuration(assetId: string): number | undefined {
     const meta = this.opts.assets[assetId]
     return meta?.kind === 'video' ? meta.duration : undefined
+  }
+
+  depth(assetId: string): DepthAnalysis | null {
+    return this.opts.depths[assetId] ?? null
   }
 
   // ---- Frame preparation ----

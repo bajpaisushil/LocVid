@@ -1,4 +1,4 @@
-import { ChevronFirst, ChevronLast, Pause, Play, StepBack, StepForward } from 'lucide-react'
+import { ChevronFirst, ChevronLast, Pause, Play, StepBack, StepForward, Wand2 } from 'lucide-react'
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
@@ -16,7 +16,7 @@ import { getPreviewEngine, setPreviewEngine } from './previewRegistry'
 /** The live preview shares the exporter's renderer; it just draws at screen size. */
 const MAX_PREVIEW_LONG_SIDE = 1280
 
-export function PreviewPanel() {
+export function PreviewPanel({ onDescribe }: { onDescribe?: () => void }) {
   const project = useProject()
   const stageRef = useRef<HTMLDivElement>(null)
   const [engine, setEngine] = useState<PreviewEngine | null>(null)
@@ -87,12 +87,17 @@ export function PreviewPanel() {
           />
           {engine ? <OverlayInteraction engine={engine} /> : null}
           {project.scenes.length === 0 ? (
-            <div className="pointer-events-none absolute inset-0 grid place-items-center p-6 text-center">
+            <div className="absolute inset-0 grid place-items-center p-6 text-center">
               <div className="max-w-sm">
                 <p className="text-sm font-medium text-white/90">Your video is empty</p>
                 <p className="mt-1 text-xs text-white/60">
-                  Import media and add it as scenes, or turn a script into a storyboard. Scenes appear on the timeline below.
+                  Describe the video you want, import media and add it as scenes, or turn a script into a storyboard.
                 </p>
+                {onDescribe ? (
+                  <Button size="sm" className="mt-3" onClick={onDescribe} data-testid="empty-describe">
+                    <Wand2 /> Describe your video
+                  </Button>
+                ) : null}
               </div>
             </div>
           ) : null}

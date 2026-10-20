@@ -59,7 +59,17 @@ function backgroundStyle(scene: Scene, assets: Record<string, AssetEntry>): Reac
   const bg = scene.background
   if (bg.kind === 'media') {
     const thumb = assets[bg.assetId]?.thumbnailUrl
-    return thumb ? { backgroundImage: `url(${thumb})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}
+    if (!thumb) return {}
+    if (bg.fit === 'crop' && bg.crop.width < 0.999) {
+      // Show the shot's own framing, so differently framed shots of one photo look different.
+      const { x, y, width, height } = bg.crop
+      return {
+        backgroundImage: `url(${thumb})`,
+        backgroundSize: `${100 / width}% ${100 / height}%`,
+        backgroundPosition: `${width < 1 ? (x / (1 - width)) * 100 : 50}% ${height < 1 ? (y / (1 - height)) * 100 : 50}%`,
+      }
+    }
+    return { backgroundImage: `url(${thumb})`, backgroundSize: 'cover', backgroundPosition: 'center' }
   }
   const [a, b] = [bg.colors[0] ?? '#333', bg.colors[1] ?? bg.colors[0] ?? '#333']
   return { backgroundImage: `linear-gradient(135deg, ${a}, ${b})` }

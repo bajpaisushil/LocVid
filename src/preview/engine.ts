@@ -8,6 +8,8 @@ import { get2d, type Ctx2D, type FrameSources, type SourceImage } from '@/render
 import type { AssetEntry } from '@/state/editorStore'
 import { PreviewAudio } from './audioPlayer'
 import { PreviewMediaCache } from './mediaCache'
+import { getAnalyses } from '@/storage/repo'
+import type { DepthAnalysis } from '@/storage/db'
 
 interface VideoSlot {
   el: HTMLVideoElement
@@ -41,6 +43,9 @@ export class PreviewEngine {
   private metas: Record<string, AssetMeta> = {}
   private timeline: Timeline = buildTimeline({ scenes: [], fadeOutEnd: 0 })
   private videos = new Map<string, VideoSlot>()
+  /** Depth maps loaded from IndexedDB (null = none computed for that asset). */
+  private depths = new Map<string, DepthAnalysis | null>()
+  private depthLoading = new Set<string>()
   private time = 0
   private playing = false
   private raf = 0
@@ -194,6 +199,26 @@ export class PreviewEngine {
       const meta = this.metas[assetId]
       return meta?.kind === 'video' ? meta.duration : undefined
     },
+    depth: (assetId) => {
+      if (this.depths.has(assetId)) return this.depths.get(assetId) ?? null
+      if (!this.depthLoading.has(assetId)) {
+        this.depthLoading.add(assetId)
+        void getAnalyses([assetId])
+          .then((found) => {
+            this.depths.set(assetId, found.get(assetId) ?? null)
+            this.requestRender()
+          })
+          .catch(() => this.depths.set(assetId, null))
+          .finally(() => this.depthLoading.delete(assetId))
+      }
+      return null
+    },
+  }
+
+  /** Forget a cached depth map (call after analyzing an image) so the next frame picks it up. */
+  refreshDepth(assetId: string): void {
+    this.depths.delete(assetId)
+    this.requestRender()
   }
 
   private draw(): void {
@@ -307,20 +332,15 @@ export class PreviewEngine {
     const canvas = document.createElement('canvas')
     canvas.width = width
     canvas.height = Math.round(width / aspect)
-    const compositor = new Compositor((w, h) => {
-      const c = document.createElement('canvas')
-      c.width = w
-      c.height = h
-      return c
-    })
-    compositor.render(
+    // Reuse the preview's compositor (and its single WebGL context) at poster size.
+    this.compositor.render(
       get2d(canvas),
       canvas.width,
       canvas.height,
       { project: this.project, timeline: this.timeline, sources: this.sources },
       time,
     )
-    compositor.dispose()
+    this.requestRender()
     return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.8))
   }
 

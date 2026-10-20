@@ -10,6 +10,8 @@ export interface ExportCapabilities {
   aac: boolean
   /** A worker can render (OffscreenCanvas 2D + FontFace) and encode. */
   workerRendering: boolean
+  /** The worker can also use WebGL2 (cinematic effects); otherwise those exports render on the page. */
+  workerWebGL: boolean
   offlineAudio: boolean
   webAssembly: boolean
   /** Approximate RAM in GB (Chromium only), null when unknown. */
@@ -17,34 +19,35 @@ export interface ExportCapabilities {
   cores: number
 }
 
-let workerProbe: Promise<boolean> | null = null
+let workerProbe: Promise<{ rendering: boolean; webgl: boolean }> | null = null
 
 /** Spin up the export worker once and ask what it supports. */
-export function probeWorker(): Promise<boolean> {
+export function probeWorker(): Promise<{ rendering: boolean; webgl: boolean }> {
   if (!workerProbe) {
-    workerProbe = new Promise<boolean>((resolve) => {
+    workerProbe = new Promise((resolve) => {
       let worker: Worker
+      const none = { rendering: false, webgl: false }
       try {
         worker = createExportWorker()
       } catch {
-        resolve(false)
+        resolve(none)
         return
       }
       const timer = setTimeout(() => {
         worker.terminate()
-        resolve(false)
+        resolve(none)
       }, 5000)
       worker.onmessage = (e: MessageEvent) => {
-        const r = e.data as { type: string; canvas2d?: boolean; fonts?: boolean; videoEncoder?: boolean }
+        const r = e.data as { type: string; canvas2d?: boolean; fonts?: boolean; videoEncoder?: boolean; webgl2?: boolean }
         if (r.type !== 'probe-result') return
         clearTimeout(timer)
         worker.terminate()
-        resolve(!!(r.canvas2d && r.fonts && r.videoEncoder))
+        resolve({ rendering: !!(r.canvas2d && r.fonts && r.videoEncoder), webgl: !!r.webgl2 })
       }
       worker.onerror = () => {
         clearTimeout(timer)
         worker.terminate()
-        resolve(false)
+        resolve(none)
       }
       worker.postMessage({ type: 'probe' })
     })
@@ -61,15 +64,15 @@ export async function detectExportCapabilities(width: number, height: number, fp
     cores: nav.hardwareConcurrency || 2,
   }
   if (typeof VideoEncoder === 'undefined') {
-    return { ...base, h264: false, aac: false, workerRendering: false }
+    return { ...base, h264: false, aac: false, workerRendering: false, workerWebGL: false }
   }
   const { canEncodeVideo, canEncodeAudio, Quality } = await import('mediabunny')
-  const [h264, aac, workerRendering] = await Promise.all([
+  const [h264, aac, worker] = await Promise.all([
     canEncodeVideo('avc', { width, height, quality: new Quality({ bitrate }), frameRate: fps }).catch(() => false),
     typeof AudioEncoder === 'undefined'
       ? Promise.resolve(false)
       : canEncodeAudio('aac', { numberOfChannels: 2, sampleRate: 48_000, quality: new Quality({ bitrate: 160_000 }) }).catch(() => false),
     probeWorker(),
   ])
-  return { ...base, h264, aac, workerRendering }
+  return { ...base, h264, aac, workerRendering: worker.rendering, workerWebGL: worker.webgl }
 }

@@ -1,5 +1,5 @@
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { navigate } from '@/app/router'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -7,11 +7,9 @@ import { errorMessage } from '@/lib/errors'
 import { useEditorStore } from '@/state/editorStore'
 import { buildTimeline } from '@/core/timeline'
 import { getAssets, getProject, savePoster } from '@/storage/repo'
-import { AIDialog } from '@/features/ai/AIDialog'
-import { ExportDialog } from '@/features/export/ExportDialog'
-import { StoryboardDialog } from '@/features/storyboard/StoryboardDialog'
 import { AssetPanel } from './AssetPanel'
 import { startAutosave } from './autosave'
+import { takePendingPrompt } from '@/features/prompt/pendingPrompt'
 import { importIntoProject } from './mediaImport'
 import { PreviewPanel } from './PreviewPanel'
 import { getPreviewEngine } from './previewRegistry'
@@ -19,6 +17,14 @@ import { PropertiesPanel } from './PropertiesPanel'
 import { useEditorShortcuts } from './shortcuts'
 import { Timeline } from './Timeline'
 import { Toolbar } from './Toolbar'
+
+// Dialogs are split out and fetched the first time they open.
+const StoryboardDialog = lazy(() => import('@/features/storyboard/StoryboardDialog').then((m) => ({ default: m.StoryboardDialog })))
+const ExportDialog = lazy(() => import('@/features/export/ExportDialog').then((m) => ({ default: m.ExportDialog })))
+const AIDialog = lazy(() => import('@/features/ai/AIDialog').then((m) => ({ default: m.AIDialog })))
+const PromptToVideoDialog = lazy(() =>
+  import('@/features/prompt/PromptToVideoDialog').then((m) => ({ default: m.PromptToVideoDialog })),
+)
 
 type LoadState = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready' }
 
@@ -100,8 +106,12 @@ function usePosterUpdates(projectId: string) {
   }, [saveStatus, revision, projectId])
 }
 
+type DialogName = 'prompt' | 'storyboard' | 'export' | 'ai' | 'ai-images'
+
 function EditorWorkspace({ projectId }: { projectId: string }) {
-  const [dialog, setDialog] = useState<'storyboard' | 'export' | 'ai' | null>(null)
+  // A prompt typed on the home screen opens straight into "Describe your video".
+  const [initialPrompt] = useState(() => takePendingPrompt(projectId))
+  const [dialog, setDialog] = useState<DialogName | null>(initialPrompt ? 'prompt' : null)
   const [fileDrag, setFileDrag] = useState(false)
   useEditorShortcuts(dialog === null)
   usePosterUpdates(projectId)
@@ -127,10 +137,15 @@ function EditorWorkspace({ projectId }: { projectId: string }) {
         void importIntoProject([...e.dataTransfer.files], { asScenes: overTimeline })
       }}
     >
-      <Toolbar onOpenStoryboard={() => setDialog('storyboard')} onOpenAI={() => setDialog('ai')} onExport={() => setDialog('export')} />
+      <Toolbar
+        onOpenPrompt={() => setDialog('prompt')}
+        onOpenStoryboard={() => setDialog('storyboard')}
+        onOpenAI={() => setDialog('ai')}
+        onExport={() => setDialog('export')}
+      />
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(220px,272px)_minmax(0,1fr)_minmax(280px,330px)]">
         <AssetPanel />
-        <PreviewPanel />
+        <PreviewPanel onDescribe={() => setDialog('prompt')} />
         <PropertiesPanel />
       </div>
       <Timeline />
@@ -141,9 +156,21 @@ function EditorWorkspace({ projectId }: { projectId: string }) {
           </p>
         </div>
       ) : null}
-      <StoryboardDialog open={dialog === 'storyboard'} onOpenChange={(o) => setDialog(o ? 'storyboard' : null)} />
-      <ExportDialog open={dialog === 'export'} onOpenChange={(o) => setDialog(o ? 'export' : null)} />
-      <AIDialog open={dialog === 'ai'} onOpenChange={(o) => setDialog(o ? 'ai' : null)} />
+      <Suspense fallback={null}>
+        {dialog === 'storyboard' ? <StoryboardDialog open onOpenChange={(o) => setDialog(o ? 'storyboard' : null)} /> : null}
+        {dialog === 'export' ? <ExportDialog open onOpenChange={(o) => setDialog(o ? 'export' : null)} /> : null}
+        {dialog === 'ai' || dialog === 'ai-images' ? (
+          <AIDialog open initialTab={dialog === 'ai-images' ? 'images' : 'scenes'} onOpenChange={(o) => setDialog(o ? dialog : null)} />
+        ) : null}
+        {dialog === 'prompt' ? (
+          <PromptToVideoDialog
+            open
+            initialPrompt={initialPrompt ?? ''}
+            onOpenChange={(o) => setDialog(o ? 'prompt' : null)}
+            onSetupModel={() => setDialog('ai-images')}
+          />
+        ) : null}
+      </Suspense>
     </div>
   )
 }

@@ -28,7 +28,13 @@ async function probe() {
   const fonts = typeof FontFace !== 'undefined' && !!scope.fonts
   const videoEncoder = typeof VideoEncoder !== 'undefined'
   const videoDecoder = typeof VideoDecoder !== 'undefined'
-  return { type: 'probe-result', canvas2d, fonts, videoEncoder, videoDecoder }
+  let webgl2 = false
+  try {
+    webgl2 = typeof OffscreenCanvas !== 'undefined' && !!new OffscreenCanvas(2, 2).getContext('webgl2')
+  } catch {
+    webgl2 = false
+  }
+  return { type: 'probe-result', canvas2d, fonts, videoEncoder, videoDecoder, webgl2 }
 }
 
 scope.onmessage = async (event: MessageEvent) => {

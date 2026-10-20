@@ -2,7 +2,10 @@ import { outputDimensions } from '@/core/defaults'
 import { buildTimeline, frameCount } from '@/core/timeline'
 import { MAX_PROJECT_DURATION, type AssetMeta, type Project } from '@/core/types'
 import { safeFileName } from '@/lib/download'
-import { getAssetBlob, getAssets } from '@/storage/repo'
+import { analyzeDepth, isDepthModelReady } from '@/ai/vision/depth'
+import { lookIsNeutral } from '@/core/defaults'
+import type { DepthAnalysis } from '@/storage/db'
+import { getAnalyses, getAssetBlob, getAssets } from '@/storage/repo'
 import { mixProjectAudio } from './audioMix'
 import { detectExportCapabilities, type ExportCapabilities } from './capabilities'
 import { muxAacWithFFmpeg, runFFmpegPipeline } from './ffmpegPipeline'
@@ -31,6 +34,15 @@ export function usedAssetIds(project: Project): string[] {
   }
   for (const track of project.audioTracks) ids.add(track.assetId)
   if (project.brand.logoAssetId) ids.add(project.brand.logoAssetId)
+  return [...ids]
+}
+
+/** Image assets used by scenes with cinematic 3D motion enabled. */
+export function cinematicAssetIds(project: Project, metas: Record<string, AssetMeta>): string[] {
+  const ids = new Set<string>()
+  for (const s of project.scenes) {
+    if (s.cinematic.enabled && s.background.kind === 'media' && metas[s.background.assetId]?.kind === 'image') ids.add(s.background.assetId)
+  }
   return [...ids]
 }
 
@@ -130,6 +142,26 @@ export async function exportProject(project: Project, preference: EnginePreferen
     for (const id of Object.keys(metas)) blobs[id] = await getAssetBlob(id)
     assertActive()
 
+    // Depth maps for cinematic (3D motion) scenes; analyze any missing ones if the model is here.
+    const depths: Record<string, DepthAnalysis> = {}
+    const needsDepth = cinematicAssetIds(project, metas)
+    if (needsDepth.length) {
+      const found = await getAnalyses(needsDepth)
+      const missing = needsDepth.filter((id) => !found.has(id))
+      if (missing.length && (await isDepthModelReady())) {
+        for (let i = 0; i < missing.length; i++) {
+          report('preparing', i / missing.length, { detail: `Analyzing depth ${i + 1} of ${missing.length}` })
+          const record = await analyzeDepth(missing[i]!)
+          found.set(record.assetId, record)
+          assertActive()
+        }
+      }
+      for (const [id, record] of found) depths[id] = record
+      const without = needsDepth.filter((id) => !depths[id]).length
+      if (without) warnings.push(`${without} cinematic scene image${without === 1 ? ' has' : 's have'} no depth map, so 2D motion was used instead. Download the depth model in the scene's Motion settings.`)
+    }
+    const usesGL = needsDepth.length > 0 || project.scenes.some((s) => !lookIsNeutral(s.look))
+
     report('audio', 0, { detail: 'Mixing audio' })
     const timeline = buildTimeline(project)
     const total = frameCount(timeline.duration, settings.fps)
@@ -142,6 +174,7 @@ export async function exportProject(project: Project, preference: EnginePreferen
       project,
       assets: metas,
       blobs,
+      depths,
       settings,
       audio: mix && mix.channels.length ? { channels: mix.channels, sampleRate: mix.sampleRate } : null,
       encodeAudio: engine === 'webcodecs' && caps.aac,
@@ -167,7 +200,7 @@ export async function exportProject(project: Project, preference: EnginePreferen
     if (engine === 'webcodecs') {
       report('video', 0, { frame: 0, totalFrames: total, detail: 'Starting encoder' })
       let result: { buffer: ArrayBuffer; warnings: string[]; videoCodec: string; audioCodec: string | null }
-      if (caps.workerRendering) {
+      if (caps.workerRendering && (!usesGL || caps.workerWebGL)) {
         renderedIn = 'worker'
         result = await runInWorker(job, onFrames, signal)
       } else {

@@ -19,3 +19,6 @@ ff -f lavfi -i "sine=frequency=660:sample_rate=48000" -t 2 voice.wav
 # Invalid inputs.
 printf 'this is not media' > notes.txt
 head -c 2048 /dev/urandom > broken.png
+# depth-scene.jpg is not generated here: it is a 512×512 picture made locally with
+# SD-Turbo inside LocVid (prompt: "wide establishing shot of a lighthouse on a rocky
+# coast at golden hour, cinematic film still"), used to test depth-based motion.

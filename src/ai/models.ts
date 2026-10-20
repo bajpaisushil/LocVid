@@ -1,7 +1,7 @@
 /**
- * Optional in-browser image generation models. Only models that genuinely
- * run in a browser tab with onnxruntime-web are listed, pinned to an exact
- * repository revision with exact file sizes (downloads are verified).
+ * Optional on-device AI models. Only models that genuinely run in a browser
+ * tab with ONNX Runtime Web are listed, each pinned to an exact repository
+ * revision with exact file sizes (downloads are verified byte for byte).
  */
 
 export interface ModelFile {
@@ -9,7 +9,7 @@ export interface ModelFile {
   bytes: number
 }
 
-export interface ImageModel {
+export interface ModelManifest {
   id: string
   name: string
   publisher: string
@@ -18,10 +18,13 @@ export interface ImageModel {
   repo: string
   revision: string
   files: ModelFile[]
-  output: { width: number; height: number }
-  requirements: { webgpu: true; shaderF16: boolean; gpuMemoryGB: number; ramGB: number }
   /** Rough expectations so the UI can set them honestly. */
   speed: string
+}
+
+export interface ImageModel extends ModelManifest {
+  output: { width: number; height: number }
+  requirements: { webgpu: true; shaderF16: boolean; gpuMemoryGB: number; ramGB: number }
 }
 
 export const SD_TURBO: ImageModel = {
@@ -50,10 +53,37 @@ export const SD_TURBO: ImageModel = {
   speed: 'First image after loading takes ~10–60 s (GPU shader compilation); later images take seconds on a recent laptop GPU.',
 }
 
-export function modelBytes(model: ImageModel): number {
+export function modelBytes(model: ModelManifest): number {
   return model.files.reduce((n, f) => n + f.bytes, 0)
 }
 
-export function fileUrl(model: ImageModel, file: ModelFile): string {
+export function fileUrl(model: ModelManifest, file: ModelFile): string {
   return `https://huggingface.co/${model.repo}/resolve/${model.revision}/${file.path}`
+}
+
+const DEPTH_LICENSE = {
+  name: 'Apache-2.0',
+  url: 'https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf',
+  summary: 'Permissive: free for personal and commercial use.',
+}
+
+/** Depth Anything V2 Small, fp16 — for GPUs with WebGPU half precision. */
+export const DEPTH_GPU: ModelManifest = {
+  id: 'depth-anything-v2-small-fp16',
+  name: 'Depth Anything V2 Small',
+  publisher: 'Depth Anything team (ONNX by onnx-community)',
+  description: 'Estimates how far away every pixel of a photo is, so the camera can move through it in 3D.',
+  license: DEPTH_LICENSE,
+  repo: 'onnx-community/depth-anything-v2-small',
+  revision: '4472b7362082ad9968fee890ca0f1e5aca36b93d',
+  files: [{ path: 'onnx/model_fp16.onnx', bytes: 49_642_442 }],
+  speed: 'Well under a second per image on a recent GPU.',
+}
+
+/** Same model, int8 — runs on any CPU through WebAssembly (no WebGPU needed). */
+export const DEPTH_CPU: ModelManifest = {
+  ...DEPTH_GPU,
+  id: 'depth-anything-v2-small-int8',
+  files: [{ path: 'onnx/model_quantized.onnx', bytes: 27_258_801 }],
+  speed: 'A few seconds per image on the CPU.',
 }
