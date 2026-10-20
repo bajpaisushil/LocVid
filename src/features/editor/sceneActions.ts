@@ -3,10 +3,12 @@ import type { TimelineEntry } from '@/core/timeline'
 import { useEditorStore } from '@/state/editorStore'
 import { usePlaybackStore } from '@/state/playbackStore'
 
-/** Seek so the preview shows a scene itself, not the transition into it. */
+/** Seek so the preview shows a scene itself, not the transition into it (nor the first scene's fade from black). */
 export function seekToScene(entry: TimelineEntry) {
   usePlaybackStore.getState().pause()
-  usePlaybackStore.getState().seek(entry.start + entry.inDuration / 2 + 0.01)
+  const { scene } = entry
+  const openingFade = entry.start === 0 && scene.transition.type !== 'none' ? Math.min(scene.transition.duration, scene.duration * 0.5) : 0
+  usePlaybackStore.getState().seek(entry.start + Math.max(entry.inDuration / 2, openingFade) + 0.01)
 }
 
 export function sceneActions() {

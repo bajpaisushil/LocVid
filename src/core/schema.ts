@@ -7,6 +7,7 @@ import {
   SCHEMA_VERSION,
   type AssetMeta,
   type Project,
+  type PropKind,
 } from './types'
 
 /**
@@ -80,6 +81,20 @@ const motionSchema = z
   })
   .catch({ preset: 'none', intensity: 0.5, easing: 'easeInOut' })
 
+const subjectSchema = z
+  .object({
+    action: enumOf(['none', 'breathe', 'sway', 'walk', 'run', 'jump', 'dance', 'kick', 'approach', 'float'], 'none'),
+    amount: num(0, 1, 0.6),
+    direction: enumOf(['left', 'right'], 'right'),
+  })
+  .catch({ action: 'none', amount: 0.6, direction: 'right' })
+
+const PROP_KINDS = ['football', 'birds', 'balloons', 'butterflies', 'confetti', 'petals', 'leaves', 'lanterns'] as const
+const propsSchema = z
+  .array(z.unknown())
+  .catch([])
+  .transform((list) => [...new Set(list.filter((p): p is PropKind => PROP_KINDS.includes(p as PropKind)))].slice(0, PROP_KINDS.length))
+
 const cinematicSchema = z
   .object({
     enabled: bool(false),
@@ -92,8 +107,21 @@ const cinematicSchema = z
     animateSky: bool(true),
     foliage: bool(false),
     haze: num(0, 1, 0),
+    // Added later: projects saved before subject animation get the defaults.
+    subject: subjectSchema,
+    props: propsSchema,
   })
-  .catch({ enabled: false, camera: 'dollyIn', intensity: 0.5, focus: 'none', animateSky: true, foliage: false, haze: 0 })
+  .catch({
+    enabled: false,
+    camera: 'dollyIn',
+    intensity: 0.5,
+    focus: 'none',
+    animateSky: true,
+    foliage: false,
+    haze: 0,
+    subject: { action: 'none', amount: 0.6, direction: 'right' },
+    props: [],
+  })
 
 const lookSchema = z
   .object({

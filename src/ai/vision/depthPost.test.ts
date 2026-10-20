@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { depthInputSize, farRegionMask, layeredDepth, maxMinFilter, normalizeDisparity, occluderMask, pushPullFill, subjectBox, subjectDisparity } from './depthPost'
+import { depthInputSize, farRegionMask, layeredDepth, maxMinFilter, normalizeDisparity, occluderMask, pushPullFill, spreadTexture, subjectBox, subjectDisparity } from './depthPost'
 
 function image(width: number, height: number, f: (x: number, y: number) => number): Uint16Array {
   const out = new Uint16Array(width * height)
@@ -122,5 +122,20 @@ describe('subject box', () => {
   })
   it('falls back to a centered box when nothing stands out', () => {
     expect(subjectBox(image(50, 50, () => 0.1), 50, 50, 0.9)).toEqual([0.25, 0.2, 0.5, 0.6])
+  })
+
+  it('keeps smooth patches next to detail out of the sky mask', () => {
+    // A flat sky (far everywhere) with one textured pixel: its neighborhood must not drift.
+    const w = 30
+    const h = 20
+    const depth = new Uint16Array(w * h)
+    const texture = new Float32Array(w * h)
+    texture[5 * w + 15] = 0.5
+    const plain = farRegionMask(depth, w, h, 0.06, texture)
+    const spread = farRegionMask(depth, w, h, 0.06, spreadTexture(texture, w, h, 2))
+    expect(plain[5 * w + 16]).toBe(1)
+    expect(spread[5 * w + 16]).toBe(0)
+    expect(spread[5 * w + 17]).toBe(0)
+    expect(spread[5 * w + 18]).toBe(1)
   })
 })

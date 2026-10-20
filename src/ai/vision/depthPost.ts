@@ -205,6 +205,33 @@ export function pushPullFill(values: Float32Array, channels: number, width: numb
   return levels[0]!.v
 }
 
+/**
+ * Separable max filter over a (2r+1)² square. Spreading the texture measure
+ * this way keeps smooth patches *near* detail (the white panels of a ball in
+ * the sky, a bird, a rooftop) out of the sky mask, so drifting never smears them.
+ */
+export function spreadTexture(src: Float32Array, width: number, height: number, r: number): Float32Array {
+  if (r <= 0) return src.slice()
+  const tmp = new Float32Array(src.length)
+  for (let y = 0; y < height; y++) {
+    const row = y * width
+    for (let x = 0; x < width; x++) {
+      let v = 0
+      for (let k = Math.max(0, x - r); k <= Math.min(width - 1, x + r); k++) v = Math.max(v, src[row + k]!)
+      tmp[row + x] = v
+    }
+  }
+  const out = new Float32Array(src.length)
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      let v = 0
+      for (let k = Math.max(0, y - r); k <= Math.min(height - 1, y + r); k++) v = Math.max(v, tmp[k * width + x]!)
+      out[y * width + x] = v
+    }
+  }
+  return out
+}
+
 /** Luminance gradient magnitude (0..1) — texture detector used to keep the sky mask to smooth areas. */
 export function luminanceGradient(rgba: Uint8ClampedArray, width: number, height: number): Float32Array {
   const lum = new Float32Array(width * height)

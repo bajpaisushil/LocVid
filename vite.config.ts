@@ -12,6 +12,28 @@ import { defineConfig, type Plugin } from 'vite'
 const MODEL_HOSTS = ['https://huggingface.co', 'https://*.huggingface.co', 'https://*.hf.co']
 
 /**
+ * Optional external homes for the two large runtime binaries (FFmpeg core
+ * ~31 MB, ONNX Runtime ~27 MB), for static hosts with a per-file size limit
+ * such as Cloudflare Pages (25 MiB). When set, the build leaves those files
+ * out of dist/ and allows the host(s) in the Content-Security-Policy.
+ */
+const FFMPEG_BASE = process.env.VITE_FFMPEG_BASE_URL
+const ORT_WASM = process.env.VITE_ORT_WASM_URL
+const EXTERNAL_HOSTS = [...new Set([FFMPEG_BASE, ORT_WASM].filter((u): u is string => !!u).map((u) => new URL(u).origin))]
+
+function externalBinaries(): Plugin {
+  return {
+    name: 'locvid-external-binaries',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+      for (const name of Object.keys(bundle)) {
+        if ((FFMPEG_BASE && /ffmpeg-core.*\.wasm$/.test(name)) || (ORT_WASM && /ort-wasm.*\.wasm$/.test(name))) delete bundle[name]
+      }
+    },
+  }
+}
+
+/**
  * Injects a Content-Security-Policy into production builds. It enforces the
  * local-first promise at the browser level: scripts, workers and network
  * requests are restricted to the app's own origin, blob/data URLs, and the
@@ -22,7 +44,7 @@ function contentSecurityPolicy(): Plugin {
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval' blob:",
     "worker-src 'self' blob:",
-    `connect-src 'self' blob: data: ${MODEL_HOSTS.join(' ')}`,
+    `connect-src 'self' blob: data: ${[...MODEL_HOSTS, ...EXTERNAL_HOSTS].join(' ')}`,
     "img-src 'self' blob: data:",
     "media-src 'self' blob: data:",
     "font-src 'self' data:",
@@ -46,7 +68,7 @@ function contentSecurityPolicy(): Plugin {
 export default defineConfig({
   // Relative base so the static build works from any sub-path (e.g. GitHub Pages).
   base: process.env.VITE_BASE ?? './',
-  plugins: [react(), tailwindcss(), contentSecurityPolicy()],
+  plugins: [react(), tailwindcss(), contentSecurityPolicy(), externalBinaries()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

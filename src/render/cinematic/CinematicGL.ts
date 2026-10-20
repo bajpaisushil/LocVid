@@ -5,10 +5,12 @@ import {
   CustomBlending,
   DataTexture,
   DataUtils,
+  DoubleSide,
   GLSL3,
   HalfFloatType,
   LinearFilter,
   Mesh,
+  NearestFilter,
   NoBlending,
   NoColorSpace,
   OneFactor,
@@ -30,8 +32,9 @@ import {
   type IUniform,
 } from 'three'
 import type { Atmosphere, CinematicSettings, LookSettings } from '@/core/types'
+import { featherMask } from '@/ai/vision/cutoutPost'
 import { createRng } from '@/lib/math'
-import type { DepthAnalysis } from '@/storage/db'
+import { CUTOUT_VERSION, type CutoutActor, type DepthAnalysis, type SubjectCutout } from '@/storage/db'
 import type { AnyCanvas } from '../types'
 import type { CameraState } from './camera'
 import { GRADES } from './grades'
@@ -45,7 +48,14 @@ import {
   PARALLAX_FRAG,
   PARTICLE_FRAG,
   PARTICLE_VERT,
+  SHADOW_FRAG,
+  SHADOW_VERT,
+  SUBJECT_FRAG,
+  SUBJECT_VERT,
 } from './shaders'
+import { PropLayer, type BallDraw } from './PropLayer'
+import { ballAt } from './props'
+import { actorPose, type ActorPose } from './subject'
 
 const RT_COPY_FRAG = /* glsl */ `
 precision highp float;
@@ -66,6 +76,8 @@ export interface ShotInput {
   camera: CameraState
   /** Seconds since the shot became visible (drives every animation). */
   time: number
+  /** Length of the shot in seconds (times one-off actions such as a kick). */
+  duration: number
   settings: CinematicSettings
   /** Focus plane as disparity, or null for no depth of field. */
   focus: number | null
@@ -121,6 +133,76 @@ interface DepthTextures {
   dispose(): void
 }
 
+/** The depth layers the parallax pass reads (the original picture's, or the clean plate's). */
+interface DepthLayers {
+  width: number
+  height: number
+  depth: ArrayBuffer
+  bgDepth: ArrayBuffer
+  fill: ArrayBuffer
+  hole: ArrayBuffer
+  far: ArrayBuffer
+}
+
+interface CutoutTextures {
+  plate: DataTexture
+  plateMask: DataTexture
+  matte: DataTexture
+  labels: DataTexture
+  layers: DepthTextures
+  /** One grid per actor, drawn twice: color pass and depth pass. */
+  actors: { actor: CutoutActor; geometry: BufferGeometry; color: Mesh; depth: Mesh }[]
+  dispose(): void
+}
+
+/** A usable cut-out (current format, with at least one actor), or null. */
+export function usableCutout(depth: DepthAnalysis): SubjectCutout | null {
+  const cut = depth.cutout
+  return cut && cut.version === CUTOUT_VERSION && cut.actors.length > 0 ? cut : null
+}
+
+function setupDataTexture(t: DataTexture, filter: typeof LinearFilter | typeof NearestFilter = LinearFilter): DataTexture {
+  t.flipY = false
+  t.colorSpace = NoColorSpace
+  t.minFilter = filter
+  t.magFilter = filter
+  t.generateMipmaps = false
+  t.wrapS = ClampToEdgeWrapping
+  t.wrapT = ClampToEdgeWrapping
+  t.needsUpdate = true
+  return t
+}
+
+/** A grid over the actor's box (with a little room for its soft edge); position.xy = picture uv. */
+function actorGrid(actor: CutoutActor): BufferGeometry {
+  const pad = 0.012
+  const x0 = Math.max(0, actor.box[0] - pad)
+  const y0 = Math.max(0, actor.box[1] - pad)
+  const x1 = Math.min(1, actor.box[0] + actor.box[2] + pad)
+  const y1 = Math.min(1, actor.box[1] + actor.box[3] + pad)
+  const nx = 24
+  const ny = 40
+  const positions = new Float32Array((nx + 1) * (ny + 1) * 3)
+  for (let j = 0; j <= ny; j++) {
+    for (let i = 0; i <= nx; i++) {
+      const k = (j * (nx + 1) + i) * 3
+      positions[k] = x0 + ((x1 - x0) * i) / nx
+      positions[k + 1] = y0 + ((y1 - y0) * j) / ny
+    }
+  }
+  const index: number[] = []
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const a = j * (nx + 1) + i
+      index.push(a, a + 1, a + nx + 1, a + 1, a + nx + 2, a + nx + 1)
+    }
+  }
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new BufferAttribute(positions, 3))
+  geometry.setIndex(index)
+  return geometry
+}
+
 const tex = () => ({ value: null as Texture | null })
 
 function material(fragmentShader: string, uniforms: Record<string, IUniform>): RawShaderMaterial {
@@ -136,33 +218,6 @@ function makeTarget(width: number, height: number): WebGLRenderTarget {
     magFilter: LinearFilter,
     generateMipmaps: false,
   })
-}
-
-/** Box-blur a 0/1 mask into soft 0..255 edges so effects fade in instead of cutting. */
-function featherMask(mask: Uint8Array, width: number, height: number, radius = 3): Uint8Array {
-  let src = Float32Array.from(mask, (v) => v * 255)
-  for (let pass = 0; pass < 2; pass++) {
-    const tmp = new Float32Array(src.length)
-    for (let y = 0; y < height; y++) {
-      let acc = 0
-      for (let x = -radius; x <= radius; x++) acc += src[y * width + Math.min(width - 1, Math.max(0, x))]!
-      for (let x = 0; x < width; x++) {
-        tmp[y * width + x] = acc / (radius * 2 + 1)
-        acc += src[y * width + Math.min(width - 1, x + radius + 1)]! - src[y * width + Math.max(0, x - radius)]!
-      }
-    }
-    const out = new Float32Array(src.length)
-    for (let x = 0; x < width; x++) {
-      let acc = 0
-      for (let y = -radius; y <= radius; y++) acc += tmp[Math.min(height - 1, Math.max(0, y)) * width + x]!
-      for (let y = 0; y < height; y++) {
-        out[y * width + x] = acc / (radius * 2 + 1)
-        acc += tmp[Math.min(height - 1, y + radius + 1) * width + x]! - tmp[Math.max(0, y - radius) * width + x]!
-      }
-    }
-    src = out
-  }
-  return Uint8Array.from(src, (v) => Math.round(v))
 }
 
 /** Average color of the far region (falls back to the top of the frame), mixed toward a pale sky tone. */
@@ -199,6 +254,33 @@ function hazeColor(image: TexImageSource, depth: DepthAnalysis): Vector3 {
   }
 }
 
+/** GPU textures for a set of depth layers (half-float depth, color fill, feathered masks). */
+function layerTextures(layers: DepthLayers, haze: Vector3): DepthTextures {
+  const { width, height } = layers
+  const toHalf = (buffer: ArrayBuffer) => {
+    const src = new Uint16Array(buffer)
+    const half = new Uint16Array(src.length)
+    for (let i = 0; i < src.length; i++) half[i] = DataUtils.toHalfFloat(src[i]! / 65535)
+    return setupDataTexture(new DataTexture(half, width, height, RedFormat, HalfFloatType))
+  }
+  const depth = toHalf(layers.depth)
+  const bgDepth = toHalf(layers.bgDepth)
+  const fill = setupDataTexture(new DataTexture(new Uint8Array(layers.fill), width, height, RGBAFormat, UnsignedByteType))
+  const hole = setupDataTexture(new DataTexture(featherMask(new Uint8Array(layers.hole), width, height, 1), width, height, RedFormat, UnsignedByteType))
+  const far = setupDataTexture(new DataTexture(featherMask(new Uint8Array(layers.far), width, height), width, height, RedFormat, UnsignedByteType))
+  return {
+    depth,
+    bgDepth,
+    fill,
+    hole,
+    far,
+    haze,
+    dispose() {
+      for (const t of [depth, bgDepth, fill, hole, far]) t.dispose()
+    },
+  }
+}
+
 /**
  * WebGL2 renderer for cinematic shots and film looks. Runs on the main thread
  * (preview) and inside the export worker with an OffscreenCanvas.
@@ -215,7 +297,14 @@ export class CinematicGL {
   private size = { width: 0, height: 0 }
   private readonly images = new TextureCache<Texture>(8)
   private readonly depths = new TextureCache<DepthTextures>(8)
+  private readonly cutouts = new TextureCache<CutoutTextures>(4)
   private readonly flat: Texture
+  /** 1×1 black: "no clean plate here". */
+  private readonly none: DataTexture
+  private readonly actorColor: RawShaderMaterial
+  private readonly actorDepth: RawShaderMaterial
+  private readonly shadow: Mesh
+  private readonly propLayer: PropLayer
   private lost = false
   /** Unsharp-mask strength for the current shot (set from how much the picture is enlarged). */
   private sharpen = 0
@@ -247,6 +336,8 @@ export class CinematicGL {
     this.mats = {
       parallax: material(PARALLAX_FRAG, {
         uImage: tex(),
+        uPlate: tex(),
+        uPlateMask: tex(),
         uDepth: tex(),
         uBgDepth: tex(),
         uFill: tex(),
@@ -302,6 +393,77 @@ export class CinematicGL {
     this.flat.colorSpace = NoColorSpace
     this.flat.generateMipmaps = false
     this.flat.minFilter = LinearFilter
+    this.none = setupDataTexture(new DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, RGBAFormat, UnsignedByteType))
+
+    // Actors: color over the scene (keeping the depth in alpha), then their depth into alpha.
+    const actorUniforms = (): Record<string, IUniform> => ({
+      uImage: tex(),
+      uMatte: tex(),
+      uLabels: tex(),
+      uLabel: { value: 1 },
+      uCropOrigin: { value: new Vector2() },
+      uCropSize: { value: new Vector2(1, 1) },
+      uAspect: { value: 1 },
+      uAnchor: { value: new Vector2() },
+      uHeight: { value: 1 },
+      uMove: { value: new Vector2() },
+      uRotation: { value: 0 },
+      uScale: { value: new Vector2(1, 1) },
+      uBend: { value: 0 },
+      uShift: { value: new Vector2() },
+      uDolly: { value: 0 },
+      uBase: { value: 1 },
+      uPivot: { value: 0.5 },
+      uLevel: { value: 0.5 },
+      uHaze: { value: 0 },
+      uHazeColor: { value: new Vector3() },
+      uPass: { value: 0 },
+    })
+    const actorMaterial = (pass: 0 | 1) => {
+      const u = actorUniforms()
+      u.uPass!.value = pass
+      return new RawShaderMaterial({
+        glslVersion: GLSL3,
+        vertexShader: SUBJECT_VERT,
+        fragmentShader: SUBJECT_FRAG,
+        uniforms: u,
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        // Picture space is y-down, clip space y-up: the grid's winding flips, so draw both faces.
+        side: DoubleSide,
+        blending: CustomBlending,
+        ...(pass === 0
+          ? { blendSrc: SrcAlphaFactor, blendDst: OneMinusSrcAlphaFactor, blendSrcAlpha: ZeroFactor, blendDstAlpha: OneFactor }
+          : { blendSrc: ZeroFactor, blendDst: OneFactor, blendSrcAlpha: OneFactor, blendDstAlpha: ZeroFactor }),
+      })
+    }
+    this.actorColor = actorMaterial(0)
+    this.actorDepth = actorMaterial(1)
+    const disc = new BufferGeometry()
+    disc.setAttribute('position', new BufferAttribute(new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]), 3))
+    disc.setIndex([0, 1, 2, 0, 2, 3])
+    this.shadow = new Mesh(
+      disc,
+      new RawShaderMaterial({
+        glslVersion: GLSL3,
+        vertexShader: SHADOW_VERT,
+        fragmentShader: SHADOW_FRAG,
+        uniforms: { uCenter: { value: new Vector2() }, uRadius: { value: new Vector2(0.1, 0.02) }, uStrength: { value: 0 } },
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        side: DoubleSide,
+        // Darken the color underneath; keep the depth stored in alpha.
+        blending: CustomBlending,
+        blendSrc: ZeroFactor,
+        blendDst: OneMinusSrcAlphaFactor,
+        blendSrcAlpha: ZeroFactor,
+        blendDstAlpha: OneFactor,
+      }),
+    )
+    this.shadow.frustumCulled = false
+    this.propLayer = new PropLayer(this.renderer, this.scene, this.camera)
   }
 
   get available(): boolean {
@@ -340,38 +502,40 @@ export class CinematicGL {
   }
 
   private depthTextures(depth: DepthAnalysis, image: TexImageSource): DepthTextures {
-    return this.depths.get(depth, () => {
-      const toHalf = (buffer: ArrayBuffer) => {
-        const src = new Uint16Array(buffer)
-        const half = new Uint16Array(src.length)
-        for (let i = 0; i < src.length; i++) half[i] = DataUtils.toHalfFloat(src[i]! / 65535)
-        return new DataTexture(half, depth.width, depth.height, RedFormat, HalfFloatType)
-      }
-      const depthTex = toHalf(depth.depth)
-      const bgDepthTex = toHalf(depth.bgDepth)
-      const fillTex = new DataTexture(new Uint8Array(depth.fill), depth.width, depth.height, RGBAFormat, UnsignedByteType)
-      const holeTex = new DataTexture(featherMask(new Uint8Array(depth.hole), depth.width, depth.height, 1), depth.width, depth.height, RedFormat, UnsignedByteType)
-      const farTex = new DataTexture(featherMask(new Uint8Array(depth.far), depth.width, depth.height), depth.width, depth.height, RedFormat, UnsignedByteType)
-      const all = [depthTex, bgDepthTex, fillTex, holeTex, farTex]
-      for (const t of all) {
-        t.flipY = false
-        t.colorSpace = NoColorSpace
-        t.minFilter = LinearFilter
-        t.magFilter = LinearFilter
-        t.generateMipmaps = false
-        t.wrapS = ClampToEdgeWrapping
-        t.wrapT = ClampToEdgeWrapping
-        t.needsUpdate = true
-      }
+    return this.depths.get(depth, () => layerTextures(depth, hazeColor(image, depth)))
+  }
+
+  private cutoutTextures(cut: SubjectCutout, depth: DepthAnalysis, haze: Vector3): CutoutTextures {
+    return this.cutouts.get(cut, () => {
+      const { width, height } = cut
+      const plate = setupDataTexture(new DataTexture(new Uint8Array(cut.plate), width, height, RGBAFormat, UnsignedByteType))
+      const plateMask = setupDataTexture(new DataTexture(new Uint8Array(cut.plateMask), width, height, RedFormat, UnsignedByteType))
+      const matte = setupDataTexture(new DataTexture(new Uint8Array(cut.matte), width, height, RedFormat, UnsignedByteType))
+      // Labels are ids: never interpolate them.
+      const labels = setupDataTexture(new DataTexture(new Uint8Array(cut.labels), width, height, RedFormat, UnsignedByteType), NearestFilter)
+      const layers = layerTextures(
+        { width: depth.width, height: depth.height, depth: cut.plateDepth, bgDepth: cut.plateBgDepth, fill: cut.plateFill, hole: cut.plateHole, far: cut.plateFar },
+        haze,
+      )
+      const actors = cut.actors.map((actor) => {
+        const geometry = actorGrid(actor)
+        const color = new Mesh(geometry, this.actorColor)
+        const depthMesh = new Mesh(geometry, this.actorDepth)
+        color.frustumCulled = false
+        depthMesh.frustumCulled = false
+        return { actor, geometry, color, depth: depthMesh }
+      })
       return {
-        depth: depthTex,
-        bgDepth: bgDepthTex,
-        fill: fillTex,
-        hole: holeTex,
-        far: farTex,
-        haze: hazeColor(image, depth),
+        plate,
+        plateMask,
+        matte,
+        labels,
+        layers,
+        actors,
         dispose() {
-          for (const t of all) t.dispose()
+          for (const t of [plate, plateMask, matte, labels]) t.dispose()
+          layers.dispose()
+          for (const a of actors) a.geometry.dispose()
         },
       }
     })
@@ -430,11 +594,18 @@ export class CinematicGL {
     const { width, height } = input
     this.ensureSize(width, height)
     const t = this.targets!
-    const maps = this.depthTextures(input.depth, input.image.source)
+    const original = this.depthTextures(input.depth, input.image.source)
+    // With a cut-out, the background is the clean plate (and its depth); the actors are drawn on top.
+    const cut = usableCutout(input.depth)
+    const cutTex = cut ? this.cutoutTextures(cut, input.depth, original.haze) : null
+    const maps = cutTex ? cutTex.layers : original
     const p = this.mats.parallax.uniforms
     const frameAspect = width / height
     const imageAspect = input.image.width / input.image.height
-    p.uImage!.value = this.imageTexture(input.image.source)
+    const image = this.imageTexture(input.image.source)
+    p.uImage!.value = image
+    p.uPlate!.value = cutTex?.plate ?? this.none
+    p.uPlateMask!.value = cutTex?.plateMask ?? this.none
     p.uDepth!.value = maps.depth
     p.uBgDepth!.value = maps.bgDepth
     p.uFill!.value = maps.fill
@@ -465,7 +636,143 @@ export class CinematicGL {
     const enlarge = width / Math.max(1, crop.width * input.image.width)
     this.sharpen = Math.min(0.6, Math.max(0, (enlarge - 1.3) * 0.35))
     this.pass(this.mats.parallax, t.a)
-    return this.finish(t.a, input.look, input.time, width, height, input.focus, input.camera, true)
+    const actors = cutTex ? this.drawActors(input, cutTex, image, crop, t.a) : []
+    let current = t.a
+    const props = input.settings.props
+    if (props.length) {
+      // The football plays with the main (largest) actor; without a cut-out there is no one to play with.
+      const main = actors.find((a) => a.actor.label === 1)
+      let ball: BallDraw | null = null
+      if (main && props.includes('football')) {
+        ball = {
+          state: ballAt({
+            action: input.settings.subject.action,
+            direction: input.settings.subject.direction === 'left' ? -1 : 1,
+            time: input.time,
+            duration: input.duration,
+            anchor: main.anchor,
+            height: main.height,
+            width: main.width,
+            pose: main.pose,
+            aspect: frameAspect,
+          }),
+          level: main.actor.depth,
+          actorHeight: main.height,
+        }
+      }
+      // Props test against the scene's depth (t.a) while drawing into a copy of it (t.b).
+      this.mats.rtCopy.uniforms.uSource!.value = t.a.texture
+      this.pass(this.mats.rtCopy, t.b)
+      this.quad.visible = false
+      this.propLayer.draw({ target: t.b, sceneDepth: t.a.texture, width, height, time: input.time, camera: input.camera, props, ambient: maps.haze, ball })
+      this.quad.visible = true
+      current = t.b
+    }
+    return this.finish(current, input.look, input.time, width, height, input.focus, input.camera, true)
+  }
+
+  /**
+   * Cut-out subjects over the clean plate: contact shadows, then each actor's
+   * color and depth. Returns where each actor is (for props that interact).
+   */
+  private drawActors(
+    input: ShotInput,
+    textures: CutoutTextures,
+    image: Texture,
+    crop: { x: number; y: number; width: number; height: number },
+    target: WebGLRenderTarget,
+  ): { actor: CutoutActor; pose: ActorPose; anchor: { x: number; y: number }; height: number; width: number }[] {
+    const { camera, settings } = input
+    const aspect = input.width / input.height
+    const subject = settings.subject
+    const dir = subject.direction === 'left' ? -1 : 1
+    const magnify = (d: number) => (camera.base * (1 + camera.dolly * d)) / (1 + camera.dolly * camera.pivot)
+    // Nearer (lower in the frame) actors are drawn last, so they overlap the others.
+    const order = textures.actors.map((a, i) => ({ ...a, index: i })).toSorted((a, b) => a.actor.anchor[1] - b.actor.anchor[1])
+    const pictureAspect = input.image.width / input.image.height
+    const poses = order.map(({ actor, index }) => {
+      // Room to travel before the actor's leading edge leaves the visible frame (plus a tenth of its width), in actor heights.
+      const [bx, , bw, bh] = actor.box
+      const ahead = dir > 0 ? crop.x + crop.width - (bx + bw) : bx - crop.x
+      const room = ((ahead + bw * 0.1) * pictureAspect) / bh
+      return actorPose({
+        action: subject.action,
+        amount: subject.amount,
+        direction: dir,
+        time: input.time,
+        duration: input.duration,
+        phase: index * 0.31,
+        edges: actor.edges,
+        room,
+      })
+    })
+    const frame = (a: CutoutActor) => ({
+      anchor: new Vector2((a.anchor[0] - crop.x) / crop.width, (a.anchor[1] - crop.y) / crop.height),
+      height: a.box[3] / crop.height,
+      width: a.box[2] / crop.width,
+    })
+    this.renderer.setRenderTarget(target)
+    this.quad.visible = false
+
+    if (subject.action !== 'none') {
+      const su = (this.shadow.material as RawShaderMaterial).uniforms
+      this.scene.add(this.shadow)
+      order.forEach(({ actor }, k) => {
+        if (actor.edges.bottom) return
+        const pose = poses[k]!
+        const f = frame(actor)
+        const level = actor.depth + pose.depth
+        const m = magnify(level)
+        // The shadow stays on the ground under the actor's feet (it follows travel, not jumps).
+        const ground = { x: f.anchor.x + (pose.tx * f.height) / aspect, y: f.anchor.y }
+        ;(su.uCenter!.value as Vector2).set(0.5 + (ground.x - 0.5) * m + camera.shiftX * (level - camera.pivot), 0.5 + (ground.y - 0.5) * m + camera.shiftY * (level - camera.pivot))
+        const spread = 1 + 0.5 * (1 - pose.contact)
+        const rx = 0.42 * f.width * m * spread
+        ;(su.uRadius!.value as Vector2).set(rx, rx * aspect * 0.16)
+        su.uStrength!.value = 0.3 * (0.35 + 0.65 * pose.contact)
+        this.renderer.render(this.scene, this.camera)
+      })
+      this.scene.remove(this.shadow)
+    }
+
+    for (const mat of [this.actorColor, this.actorDepth]) {
+      const u = mat.uniforms
+      u.uImage!.value = image
+      u.uMatte!.value = textures.matte
+      u.uLabels!.value = textures.labels
+      ;(u.uCropOrigin!.value as Vector2).set(crop.x, crop.y)
+      ;(u.uCropSize!.value as Vector2).set(crop.width, crop.height)
+      u.uAspect!.value = aspect
+      ;(u.uShift!.value as Vector2).set(camera.shiftX, camera.shiftY)
+      u.uDolly!.value = camera.dolly
+      u.uBase!.value = camera.base
+      u.uPivot!.value = camera.pivot
+      u.uHaze!.value = settings.haze
+      ;(u.uHazeColor!.value as Vector3).copy(textures.layers.haze)
+    }
+    order.forEach(({ actor, color, depth }, k) => {
+      const pose = poses[k]!
+      const f = frame(actor)
+      for (const mesh of [color, depth]) {
+        const u = (mesh.material as RawShaderMaterial).uniforms
+        u.uLabel!.value = actor.label
+        ;(u.uAnchor!.value as Vector2).copy(f.anchor)
+        u.uHeight!.value = f.height
+        ;(u.uMove!.value as Vector2).set(pose.tx, pose.ty)
+        u.uRotation!.value = pose.rotation
+        ;(u.uScale!.value as Vector2).set(pose.sx, pose.sy)
+        u.uBend!.value = pose.bend
+        u.uLevel!.value = Math.min(1, actor.depth + pose.depth)
+        this.scene.add(mesh)
+        this.renderer.render(this.scene, this.camera)
+        this.scene.remove(mesh)
+      }
+    })
+    this.quad.visible = true
+    return order.map(({ actor }, k) => {
+      const f = frame(actor)
+      return { actor, pose: poses[k]!, anchor: { x: f.anchor.x, y: f.anchor.y }, height: f.height, width: f.width }
+    })
   }
 
   /** Apply a look (grade, particles, bloom, lens) to a flat 2D picture. */
@@ -575,8 +882,15 @@ export class CinematicGL {
   }
 
   dispose(): void {
+    this.propLayer.dispose()
     this.images.clear()
     this.depths.clear()
+    this.cutouts.clear()
+    this.none.dispose()
+    this.actorColor.dispose()
+    this.actorDepth.dispose()
+    this.shadow.geometry.dispose()
+    ;(this.shadow.material as RawShaderMaterial).dispose()
     if (this.targets) for (const t of Object.values(this.targets)) t.dispose()
     for (const m of Object.values(this.mats)) m.dispose()
     for (const p of this.particles.values()) {

@@ -42,6 +42,19 @@ describe('project schema', () => {
     expect(restored.scenes[1]!.overlays[0]!.fontSize).toBe(0.01)
   })
 
+  it('opens projects saved before subject animation, and drops unknown props', () => {
+    const raw = JSON.parse(serializeProject(sampleProject()))
+    delete raw.scenes[0].cinematic.subject
+    delete raw.scenes[0].cinematic.props
+    raw.scenes[1].cinematic.subject = { action: 'moonwalk', amount: 3, direction: 'up' }
+    raw.scenes[1].cinematic.props = ['football', 'unicorns', 'football', 'birds']
+    const restored = parseProject(raw)
+    expect(restored.scenes[0]!.cinematic.subject).toEqual({ action: 'none', amount: 0.6, direction: 'right' })
+    expect(restored.scenes[0]!.cinematic.props).toEqual([])
+    expect(restored.scenes[1]!.cinematic.subject).toEqual({ action: 'none', amount: 1, direction: 'right' })
+    expect(restored.scenes[1]!.cinematic.props).toEqual(['football', 'birds'])
+  })
+
   it('falls back to defaults for unknown enum values', () => {
     const raw = JSON.parse(serializeProject(sampleProject()))
     raw.scenes[0].transition.type = 'spinny-cube'

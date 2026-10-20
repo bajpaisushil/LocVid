@@ -22,3 +22,6 @@ head -c 2048 /dev/urandom > broken.png
 # depth-scene.jpg is not generated here: it is a 512×512 picture made locally with
 # SD-Turbo inside LocVid (prompt: "wide establishing shot of a lighthouse on a rocky
 # coast at golden hour, cinematic film still"), used to test depth-based motion.
+# kid-football.jpg likewise comes from SD-Turbo in LocVid (prompt: "a boy kicking a
+# football on a grass field in front of a village, cartoon illustration, full body,
+# vibrant"), used to test the subject cut-out and subject animation.

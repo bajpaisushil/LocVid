@@ -147,6 +147,24 @@ export type CameraMove =
 export type FocusMode = 'none' | 'subject' | 'rack'
 
 /**
+ * What the cut-out subject (person, animal, object) does during the shot. The
+ * subject is separated from a cleaned background plate, so it can move on its
+ * own: these are whole-body actions, not limb animation.
+ */
+export type SubjectAction = 'none' | 'breathe' | 'sway' | 'walk' | 'run' | 'jump' | 'dance' | 'kick' | 'approach' | 'float'
+
+export interface SubjectSettings {
+  action: SubjectAction
+  /** 0..1 — how big the movement is. */
+  amount: number
+  /** Which way the subject faces / travels. */
+  direction: 'left' | 'right'
+}
+
+/** 3D elements added to a cinematic shot, placed in its depth and occluded by it. */
+export type PropKind = 'football' | 'birds' | 'balloons' | 'butterflies' | 'confetti' | 'petals' | 'leaves' | 'lanterns'
+
+/**
  * Cinematic 3D motion for photo backgrounds: an on-device depth model turns
  * the still into a depth map, and a WebGL renderer moves a virtual camera
  * through it with real parallax and occlusion.
@@ -163,6 +181,9 @@ export interface CinematicSettings {
   foliage: boolean
   /** 0..1 atmospheric depth haze. */
   haze: number
+  /** Subject animation (needs the on-device cut-out of the picture). */
+  subject: SubjectSettings
+  props: PropKind[]
 }
 
 export type Atmosphere = 'none' | 'dust' | 'snow' | 'rain' | 'fireflies' | 'embers' | 'sparkles'

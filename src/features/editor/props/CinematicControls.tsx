@@ -1,9 +1,11 @@
-import { Box, CheckCircle2, Download, Loader2, Sparkles, X } from 'lucide-react'
+import { Box, CheckCircle2, Download, Loader2, PersonStanding, Sparkles, X } from 'lucide-react'
 import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import type { Atmosphere, CameraMove, CinematicSettings, FocusMode, GradePreset, LookSettings, Scene } from '@/core/types'
+import { CUTOUT_MODEL, INPAINT_MODEL } from '@/ai/models'
+import type { Atmosphere, CameraMove, CinematicSettings, FocusMode, GradePreset, LookSettings, PropKind, Scene, SubjectAction, SubjectSettings } from '@/core/types'
 import { formatBytes } from '@/lib/format'
+import { CUTOUT_BYTES, useCutoutModels } from '@/features/ai/cutoutModelStore'
 import { useDepthModel } from '@/features/ai/depthModelStore'
 import { useEditorStore, useProject } from '@/state/editorStore'
 import { SegmentedField, SelectField, Section, SliderField, SwitchField } from '../fields'
@@ -16,6 +18,29 @@ const FOCUS_OPTIONS: { value: FocusMode; label: string }[] = [
   { value: 'rack', label: 'Rack focus (pull to subject)' },
 ]
 
+const PROP_OPTIONS: { value: PropKind; label: string; needsSubject?: boolean }[] = [
+  { value: 'football', label: '⚽ Football', needsSubject: true },
+  { value: 'birds', label: '🕊 Birds' },
+  { value: 'butterflies', label: '🦋 Butterflies' },
+  { value: 'balloons', label: '🎈 Balloons' },
+  { value: 'confetti', label: '🎉 Confetti' },
+  { value: 'petals', label: '🌸 Petals' },
+  { value: 'leaves', label: '🍂 Leaves' },
+  { value: 'lanterns', label: '🏮 Lanterns' },
+]
+
+const ACTION_OPTIONS: { value: SubjectAction; label: string }[] = [
+  { value: 'none', label: 'Still' },
+  { value: 'breathe', label: 'Breathe (subtle, alive)' },
+  { value: 'sway', label: 'Sway' },
+  { value: 'walk', label: 'Walk' },
+  { value: 'run', label: 'Run' },
+  { value: 'jump', label: 'Jump' },
+  { value: 'dance', label: 'Dance' },
+  { value: 'kick', label: 'Kick' },
+  { value: 'approach', label: 'Come closer' },
+  { value: 'float', label: 'Float / hover' },
+]
 
 
 /** Download/analysis status for the depth model, with explicit consent to download. */
@@ -77,6 +102,142 @@ export function DepthGate({ assetId }: { assetId: string }) {
   return <p className="text-[11px] text-muted-foreground">Checking depth model…</p>
 }
 
+/**
+ * Subject animation: the cut-out models separate the subject from the
+ * background and paint in what's behind it, so the subject can move.
+ */
+function SubjectControls({ scene, assetId }: { scene: Scene; assetId: string }) {
+  const update = useSceneUpdate(scene.id)
+  const depthReady = useDepthModel((s) => s.analyzed[assetId] === true)
+  const { status, loaded, total, analyzing, results, looked, check, download, cancel, analyze, refresh } = useCutoutModels()
+  const subject = scene.cinematic.subject
+  const set = (patch: Partial<SubjectSettings>, coalesce?: string) => update((s) => void Object.assign(s.cinematic.subject, patch), coalesce)
+  const result = results[assetId]
+  useEffect(() => {
+    if (status === 'unknown') void check()
+  }, [status, check])
+  useEffect(() => {
+    if (!looked.has(assetId)) void refresh([assetId])
+  }, [assetId, looked, refresh])
+  // Cut out automatically once the models (and the depth map) are present.
+  useEffect(() => {
+    if (status === 'ready' && depthReady && looked.has(assetId) && result === undefined && !analyzing.has(assetId)) void analyze(assetId)
+  }, [status, depthReady, looked, result, analyzing, assetId, analyze])
+
+  if (!depthReady) return null
+  let body: React.ReactNode
+  if (result === 'subject') {
+    body = (
+      <>
+        <SelectField<SubjectAction> label="Subject action" value={subject.action} options={ACTION_OPTIONS} onChange={(action) => set({ action })} testId="subject-action" />
+        {subject.action !== 'none' ? (
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+            <SliderField label="Amount" value={subject.amount} min={0} max={1} format={(v) => `${Math.round(v * 100)}%`} onChange={(amount) => set({ amount }, 'subject-amount')} />
+            <SegmentedField<'left' | 'right'>
+              label="Facing"
+              value={subject.direction}
+              options={[
+                { value: 'left', label: '←' },
+                { value: 'right', label: '→' },
+              ]}
+              onChange={(direction) => set({ direction })}
+              testId="subject-direction"
+            />
+          </div>
+        ) : null}
+      </>
+    )
+  } else if (result === 'none') {
+    body = (
+      <p className="text-[11px] text-muted-foreground" data-testid="subject-none">
+        No clear subject found in this picture — the camera still moves through it in 3D.
+      </p>
+    )
+  } else if (analyzing.has(assetId)) {
+    body = (
+      <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground" data-testid="subject-analyzing">
+        <Loader2 className="size-3.5 animate-spin" /> Cutting out the subject and painting the background behind it…
+      </p>
+    )
+  } else if (status === 'downloading') {
+    body = (
+      <div className="grid gap-1">
+        <Progress value={total ? (loaded / total) * 100 : 0} />
+        <div className="flex items-center text-[11px] text-muted-foreground tabular">
+          Downloading cut-out models · {formatBytes(loaded)} of {formatBytes(total)}
+          <Button variant="ghost" size="icon-xs" className="ml-auto" aria-label="Cancel download" onClick={cancel}>
+            <X />
+          </Button>
+        </div>
+      </div>
+    )
+  } else if (status === 'absent') {
+    body = (
+      <div className="grid gap-1.5" data-testid="subject-gate">
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          Make the subject move — walk, run, jump, dance. Two models run on this device: {CUTOUT_MODEL.name} ({CUTOUT_MODEL.license.name}) cuts the
+          subject out, {INPAINT_MODEL.name} ({INPAINT_MODEL.license.name}) paints in the background behind it. Downloaded once from huggingface.co;
+          your pictures never leave the browser.
+        </p>
+        <Button size="xs" variant="secondary" className="justify-self-start" onClick={() => void download()} data-testid="subject-download">
+          <Download /> Download cut-out models ({formatBytes(CUTOUT_BYTES)})
+        </Button>
+      </div>
+    )
+  } else {
+    body = <p className="text-[11px] text-muted-foreground">Checking cut-out models…</p>
+  }
+  return (
+    <div className="grid gap-2 rounded-md border border-dashed p-2" data-testid="subject-section">
+      <p className="flex items-center gap-1.5 text-xs font-medium">
+        <PersonStanding className="size-3.5" /> Subject
+        {result === 'subject' ? <CheckCircle2 className="size-3.5 text-emerald-400" data-testid="subject-ready" aria-label="Subject cut out" /> : null}
+      </p>
+      {body}
+    </div>
+  )
+}
+
+/** 3D elements placed in the shot's depth (occluded by nearer scenery). */
+function PropControls({ scene, assetId }: { scene: Scene; assetId: string }) {
+  const update = useSceneUpdate(scene.id)
+  const hasSubject = useCutoutModels((s) => s.results[assetId] === 'subject')
+  const props = scene.cinematic.props
+  const toggle = (kind: PropKind) =>
+    update((s) => {
+      const list = s.cinematic.props
+      const i = list.indexOf(kind)
+      if (i >= 0) list.splice(i, 1)
+      else list.push(kind)
+    })
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-xs text-muted-foreground">Add to the shot</span>
+      <div className="flex flex-wrap gap-1" role="group" aria-label="Props" data-testid="props">
+        {PROP_OPTIONS.map((o) => {
+          const on = props.includes(o.value)
+          const disabled = o.needsSubject && !hasSubject && !on
+          return (
+            <Button
+              key={o.value}
+              size="xs"
+              variant={on ? 'secondary' : 'outline'}
+              className={on ? 'border-primary/60' : undefined}
+              aria-pressed={on}
+              disabled={disabled}
+              title={disabled ? 'Needs a cut-out subject to play with (see Subject above).' : undefined}
+              onClick={() => toggle(o.value)}
+              data-testid={`prop-${o.value}`}
+            >
+              {o.label}
+            </Button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function MotionControls({ scene, isImage }: { scene: Scene; isImage: boolean }) {
   const update = useSceneUpdate(scene.id)
   const c = scene.cinematic
@@ -103,6 +264,8 @@ export function MotionControls({ scene, isImage }: { scene: Scene; isImage: bool
           <SwitchField label="Animate sky & distance" hint="Clouds and far scenery drift slowly." checked={c.animateSky} onChange={(animateSky) => set({ animateSky })} />
           <SwitchField label="Sway foliage" hint="Grass and leaves move gently in the wind." checked={c.foliage} onChange={(foliage) => set({ foliage })} />
           <SliderField label="Atmospheric haze" value={c.haze} min={0} max={1} format={(v) => (v === 0 ? 'Off' : `${Math.round(v * 100)}%`)} onChange={(haze) => set({ haze }, 'cine-haze')} />
+          <SubjectControls scene={scene} assetId={scene.background.assetId} />
+          <PropControls scene={scene} assetId={scene.background.assetId} />
         </div>
       ) : null}
     </>

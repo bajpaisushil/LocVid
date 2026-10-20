@@ -7,7 +7,7 @@ import { ease } from './easing'
 import { containRect, coverRect, cropSourceRect, type Rect } from './fit'
 import { drawGenerated } from './generated'
 import { cameraAt as cinematicCamera, focusAt } from './cinematic/camera'
-import { CinematicGL } from './cinematic/CinematicGL'
+import { CinematicGL, usableCutout } from './cinematic/CinematicGL'
 import { applyCamera, cameraAt, parallaxCameras, type Camera } from './motion'
 import { drawOverlay } from './text'
 import { get2d, type AnyCanvas, type CanvasFactory, type Ctx2D, type FrameSources, type SourceImage } from './types'
@@ -146,11 +146,13 @@ export class Compositor {
       if (source && depth && gl) {
         // Cinematic 3D: depth-parallax camera move, living elements, film look — on the GPU.
         const progress = motionProgress(entry, localTime)
+        // A cut-out subject is what the camera should stay anchored on (and focus on).
+        const subject = usableCutout(depth)?.disparity ?? depth.subject
         const camera = cinematicCamera({
           move: scene.cinematic.camera,
           intensity: scene.cinematic.intensity,
           progress,
-          subject: depth.subject,
+          subject,
           seed: hashString(scene.id),
         })
         gl.renderShot({
@@ -160,8 +162,9 @@ export class Compositor {
           depth,
           camera,
           time: sceneTime,
+          duration: scene.duration,
           settings: scene.cinematic,
-          focus: focusAt(scene.cinematic, depth.subject, progress),
+          focus: focusAt(scene.cinematic, subject, progress),
           look: scene.look,
           crop: bg.fit === 'crop' ? normalizedCrop(bg, source, w / h) : undefined,
         })

@@ -3,6 +3,7 @@ import { createRng } from '@/lib/math'
 import { ClipTokenizer } from './clipTokenizer'
 import { SD_TURBO } from '../models'
 import { readModelFile } from '../modelStore'
+import { configureOrt } from '../ortEnv'
 
 /**
  * SD-Turbo text-to-image on WebGPU via ONNX Runtime Web, in a worker so the
@@ -46,8 +47,7 @@ async function load(): Promise<void> {
   if (!gpu || !(await gpu.requestAdapter())) throw new Error('WebGPU is not available in this browser or on this device.')
   progress('Starting ONNX Runtime (WebGPU)', 0.02)
   ort = await import('onnxruntime-web/webgpu')
-  ort.env.wasm.numThreads = 1
-  ort.env.wasm.proxy = false
+  configureOrt(ort)
 
   progress('Loading tokenizer', 0.05)
   const [vocab, merges] = await Promise.all([

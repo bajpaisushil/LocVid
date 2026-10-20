@@ -64,7 +64,17 @@ export function defaultMotion(forKind: 'image' | 'video' | 'generated'): MotionS
 }
 
 export function defaultCinematic(): CinematicSettings {
-  return { enabled: false, camera: 'dollyIn', intensity: 0.5, focus: 'none', animateSky: true, foliage: false, haze: 0 }
+  return {
+    enabled: false,
+    camera: 'dollyIn',
+    intensity: 0.5,
+    focus: 'none',
+    animateSky: true,
+    foliage: false,
+    haze: 0,
+    subject: { action: 'none', amount: 0.6, direction: 'right' },
+    props: [],
+  }
 }
 
 export function defaultLook(): LookSettings {

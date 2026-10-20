@@ -43,9 +43,61 @@ export interface DepthAnalysis {
   version: number
   model: string
   createdAt: number
+  /** Subject cut-out for subject animation: absent = not analyzed yet, null = no clear subject. */
+  cutout?: SubjectCutout | null
 }
 
-export const DEPTH_ANALYSIS_VERSION = 3
+export const DEPTH_ANALYSIS_VERSION = 4
+
+/** One separately moving subject in a picture. */
+export interface CutoutActor {
+  /** Normalized [x, y, w, h]. */
+  box: [number, number, number, number]
+  /** Normalized ground-contact point (bottom center). */
+  anchor: [number, number]
+  /** Value of this actor in the label map (1-based). */
+  label: number
+  /** Fraction of the picture covered. */
+  area: number
+  /** Touches an edge of the picture (a cut-off body must not move away from that edge). */
+  edges: { left: boolean; right: boolean; top: boolean; bottom: boolean }
+  /**
+   * Disparity the actor is drawn at: the ground's where it stands (so its feet
+   * don't slide over the ground when the camera moves), else its body's.
+   */
+  depth: number
+}
+
+/**
+ * The picture's subject(s) separated from the background (IS-Net matte) plus a
+ * "clean plate" with them painted out (MI-GAN), so subjects can move on their
+ * own over plausible scenery. Maps are at `width`×`height` (the analyzed
+ * picture); the plate's depth layers are at the depth map's size and scale.
+ */
+export interface SubjectCutout {
+  version: number
+  model: string
+  width: number
+  height: number
+  /** Uint8 soft alpha of the actors. */
+  matte: ArrayBuffer
+  /** Uint8 actor label per pixel (0 = background). */
+  labels: ArrayBuffer
+  /** RGBA8 picture with the actors painted out. */
+  plate: ArrayBuffer
+  /** Uint8 0..255 — where the plate replaces the original (feathered). */
+  plateMask: ArrayBuffer
+  actors: CutoutActor[]
+  /** Disparity (0..1) of the actors on the original depth scale. */
+  disparity: number
+  plateDepth: ArrayBuffer
+  plateFar: ArrayBuffer
+  plateFill: ArrayBuffer
+  plateBgDepth: ArrayBuffer
+  plateHole: ArrayBuffer
+}
+
+export const CUTOUT_VERSION = 3
 
 export interface LocVidDB extends DBSchema {
   projects: { key: string; value: Project; indexes: { 'by-updated': number } }

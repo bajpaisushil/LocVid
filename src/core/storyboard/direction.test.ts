@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { atmosphereForPrompt, directShot, framingCrop, lookForStyle } from './direction'
+import { activityFor, atmosphereForPrompt, directShot, directSubject, facingFor, framingCrop, lookForStyle, propsForShot, subjectKind } from './direction'
 import { planVideo } from './promptPlan'
 
 describe('shot direction', () => {
@@ -40,5 +40,55 @@ describe('shot direction', () => {
     const big = framingCrop('close', [0.4, 0.3, 0.2, 0.4], 4000, 4000, 16 / 9)!
     expect(small.width).toBeGreaterThan(big.width)
     expect(1 / small.width).toBeLessThanOrEqual(1.26)
+  })
+
+  it('reads what the subject does and what it is from the prompt', () => {
+    expect(activityFor('create a video showing chhota bheem playing football')).toBe('football')
+    expect(activityFor('a girl dancing in a flower garden')).toBe('dance')
+    expect(activityFor('a dog running on the beach')).toBe('run')
+    expect(activityFor('a lighthouse at sunset')).toBe('still')
+    expect(subjectKind('a boy in a village')).toBe('person')
+    expect(subjectKind('a golden retriever dog')).toBe('animal')
+    expect(subjectKind('a lighthouse on a cliff')).toBe('object')
+    expect(subjectKind('chhota bheem')).toBe('unknown')
+  })
+
+  it('animates the subject per shot: run, kick, celebrate — and never makes a lighthouse walk', () => {
+    const prompt = 'chhota bheem playing football in a village'
+    expect(directSubject(prompt, 'In action')).toMatchObject({ action: 'run', framing: 'full' })
+    expect(directSubject(prompt, 'The moment').action).toBe('kick')
+    expect(directSubject(prompt, 'Celebration').action).toBe('jump')
+    expect(directSubject(prompt, 'Close-up').framing).toBeUndefined()
+    expect(directSubject('a lighthouse at sunset', 'In action').action).toBe('none')
+    expect(directSubject('a woman on a beach', 'Opening').action).toBe('breathe')
+  })
+
+  it('adds props that fit the words, at most two per shot', () => {
+    const prompt = 'a boy scoring a winning goal in a village football match'
+    expect(propsForShot(prompt, 'The moment', 'kick')).toContain('football')
+    expect(propsForShot(prompt, 'Celebration', 'jump')).toContain('confetti')
+    expect(propsForShot(prompt, 'Opening', 'breathe')).toEqual(['football', 'birds'])
+    expect(propsForShot('a birthday party', 'Celebration', 'jump')).toEqual(['confetti', 'balloons'])
+    expect(propsForShot('a quiet library', 'Opening', 'breathe')).toEqual([])
+  })
+
+  it('frames wide shots to keep the head in view, and full shots around the whole subject', () => {
+    // A tall standing figure in a square picture, shown in 16:9 (only 56% of the height fits).
+    const tall: [number, number, number, number] = [0.4, 0.08, 0.2, 0.88]
+    const wide = framingCrop('wide', tall, 1024, 1024, 16 / 9)!
+    expect(wide.y).toBeLessThanOrEqual(0.08)
+    // A smaller figure: the full framing contains all of it.
+    const small: [number, number, number, number] = [0.3, 0.45, 0.12, 0.3]
+    const full = framingCrop('full', small, 2048, 2048, 16 / 9)!
+    expect(full.x).toBeLessThanOrEqual(0.3)
+    expect(full.y).toBeLessThanOrEqual(0.45)
+    expect(full.x + full.width).toBeGreaterThanOrEqual(0.42)
+    expect(full.y + full.height).toBeGreaterThanOrEqual(0.75)
+    expect(full.width).toBeLessThan(1)
+  })
+
+  it('faces the subject toward the roomier side of the frame', () => {
+    expect(facingFor([0.1, 0.3, 0.2, 0.5], null)).toBe('right')
+    expect(facingFor([0.7, 0.3, 0.2, 0.5], null)).toBe('left')
   })
 })

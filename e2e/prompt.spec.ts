@@ -66,3 +66,26 @@ test('film looks render through WebGL in both the preview and the export', async
     expect(Math.max(Math.abs(r - g), Math.abs(g - b))).toBeLessThan(14)
   }
 })
+
+test('a football prompt plans what the subject does in every shot — with consent before any model download', async ({ page }) => {
+  const external: string[] = []
+  page.on('request', (r) => {
+    if (!r.url().startsWith('http://localhost')) external.push(r.url())
+  })
+  await createProject(page, 'Football')
+  await importMedia(page, ['kid-football.jpg'], 1)
+  await page.getByTestId('open-prompt').click()
+  await page.getByTestId('prompt-input').fill('create a video showing chhota bheem playing football in a village')
+  await expect(page.getByTestId('source-imported')).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByTestId('prompt-life')).toHaveAttribute('aria-checked', 'true')
+  // The models are offered (with their size), never fetched on their own.
+  await expect(page.getByTestId('prompt-cutout-download')).toBeVisible()
+  const actions = page.getByTestId('shot-action')
+  await expect(actions.filter({ hasText: 'runs' }).first()).toBeVisible()
+  await expect(actions.filter({ hasText: 'kicks' })).toHaveCount(1)
+  await expect(page.getByLabel('Props: football').first()).toBeVisible()
+  // Visuals-first defaults; switching subject animation off removes the actions.
+  await page.getByTestId('prompt-life').click()
+  await expect(actions).toHaveCount(0)
+  expect(external.filter((u) => u.includes('huggingface'))).toEqual([])
+})

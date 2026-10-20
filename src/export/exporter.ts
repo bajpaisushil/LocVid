@@ -2,7 +2,7 @@ import { outputDimensions } from '@/core/defaults'
 import { buildTimeline, frameCount } from '@/core/timeline'
 import { MAX_PROJECT_DURATION, type AssetMeta, type Project } from '@/core/types'
 import { safeFileName } from '@/lib/download'
-import { analyzeDepth, isDepthModelReady } from '@/ai/vision/depth'
+import { analyzeCutout, analyzeDepth, areCutoutModelsReady, hasCutout, isDepthModelReady } from '@/ai/vision/depth'
 import { lookIsNeutral } from '@/core/defaults'
 import type { DepthAnalysis } from '@/storage/db'
 import { getAnalyses, getAssetBlob, getAssets } from '@/storage/repo'
@@ -42,6 +42,16 @@ export function cinematicAssetIds(project: Project, metas: Record<string, AssetM
   const ids = new Set<string>()
   for (const s of project.scenes) {
     if (s.cinematic.enabled && s.background.kind === 'media' && metas[s.background.assetId]?.kind === 'image') ids.add(s.background.assetId)
+  }
+  return [...ids]
+}
+
+/** Pictures whose cinematic scenes animate the subject (or play football with it): they need a cut-out. */
+export function actingAssetIds(project: Project): string[] {
+  const ids = new Set<string>()
+  for (const s of project.scenes) {
+    if (!s.cinematic.enabled || s.background.kind !== 'media') continue
+    if (s.cinematic.subject.action !== 'none' || s.cinematic.props.includes('football')) ids.add(s.background.assetId)
   }
   return [...ids]
 }
@@ -159,6 +169,17 @@ export async function exportProject(project: Project, preference: EnginePreferen
       for (const [id, record] of found) depths[id] = record
       const without = needsDepth.filter((id) => !depths[id]).length
       if (without) warnings.push(`${without} cinematic scene image${without === 1 ? ' has' : 's have'} no depth map, so 2D motion was used instead. Download the depth model in the scene's Motion settings.`)
+      // Subject animation needs the picture's cut-out; make it now if the models are here.
+      const needsCutout = actingAssetIds(project).filter((id) => depths[id] && !hasCutout(depths[id]))
+      if (needsCutout.length && (await areCutoutModelsReady())) {
+        for (let i = 0; i < needsCutout.length; i++) {
+          report('preparing', i / needsCutout.length, { detail: `Cutting out subject ${i + 1} of ${needsCutout.length}` })
+          depths[needsCutout[i]!] = await analyzeCutout(needsCutout[i]!)
+          assertActive()
+        }
+      }
+      const still = actingAssetIds(project).filter((id) => depths[id] && !hasCutout(depths[id])).length
+      if (still) warnings.push(`${still} scene picture${still === 1 ? ' was' : 's were'} not cut out, so the subject stayed still. Download the cut-out models in the scene's Motion settings.`)
     }
     const usesGL = needsDepth.length > 0 || project.scenes.some((s) => !lookIsNeutral(s.look))
 

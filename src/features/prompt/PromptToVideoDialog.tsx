@@ -1,4 +1,4 @@
-import { Box, Download, Info, Sparkles, Wand2, X } from 'lucide-react'
+import { Box, Download, Info, PersonStanding, Sparkles, Wand2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -10,18 +10,20 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { detectDeviceCapabilities } from '@/ai/capabilities'
 import { imageGen } from '@/ai/imagegen/client'
+import { readyVideoGenerator, type VideoGenerator } from '@/ai/videogen/registry'
 import { isModelDownloaded } from '@/ai/modelStore'
 import { SD_TURBO } from '@/ai/models'
-import { analyzeDepth } from '@/ai/vision/depth'
+import { analyzeCutout, analyzeDepth } from '@/ai/vision/depth'
 import { createAudioTrack, createGeneratedBackground, createOverlay, createScene, defaultCinematic, outputDimensions, paletteFor } from '@/core/defaults'
 import { applyStoryboard } from '@/core/operations'
-import { atmosphereForPrompt, directShot, framingCrop, lookForStyle } from '@/core/storyboard/direction'
+import { atmosphereForPrompt, directShot, directSubject, facingFor, framingCrop, lookForStyle, propsForShot, trackingCamera } from '@/core/storyboard/direction'
 import { planVideo, STYLE_LABELS, type PlannedShot, type VisualStyle } from '@/core/storyboard/promptPlan'
-import type { AssetMeta, GeneratedStyle, Scene } from '@/core/types'
+import type { AssetMeta, GeneratedStyle, PropKind, Scene, SubjectAction } from '@/core/types'
 import { errorMessage } from '@/lib/errors'
 import { formatBytes } from '@/lib/format'
 import { hashString } from '@/lib/id'
 import { cn } from '@/lib/utils'
+import { CUTOUT_BYTES, useCutoutModels } from '@/features/ai/cutoutModelStore'
 import { useDepthModel } from '@/features/ai/depthModelStore'
 import { getPreviewEngine } from '@/features/editor/previewRegistry'
 import type { DepthAnalysis } from '@/storage/db'
@@ -30,9 +32,33 @@ import { usePlaybackStore } from '@/state/playbackStore'
 import { SegmentedField, SelectField, SwitchField } from '../editor/fields'
 import { importIntoProject } from '../editor/mediaImport'
 
-type Source = 'generate' | 'imported' | 'designed'
+type Source = 'clips' | 'generate' | 'imported' | 'designed'
 
 const DESIGNED_STYLES: GeneratedStyle[] = ['aurora', 'bokeh', 'radial', 'waves', 'particles', 'linear', 'grid']
+
+const PROP_ICON: Record<PropKind, string> = {
+  football: '⚽',
+  birds: '🕊',
+  balloons: '🎈',
+  butterflies: '🦋',
+  confetti: '🎉',
+  petals: '🌸',
+  leaves: '🍂',
+  lanterns: '🏮',
+}
+
+const ACTION_LABEL: Record<SubjectAction, string> = {
+  none: 'still',
+  breathe: 'breathes',
+  sway: 'sways',
+  walk: 'walks',
+  run: 'runs',
+  jump: 'jumps',
+  dance: 'dances',
+  kick: 'kicks',
+  approach: 'comes closer',
+  float: 'floats',
+}
 
 export interface PromptToVideoDialogProps {
   open: boolean
@@ -53,15 +79,19 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
   const assets = useEditorStore((s) => s.assets)
   const apply = useEditorStore((s) => s.apply)
   const depthModel = useDepthModel()
+  const cutoutModels = useCutoutModels()
   const [prompt, setPrompt] = useState(initialPrompt)
   const [length, setLength] = useState('30')
   const [style, setStyle] = useState<VisualStyle>('cinematic')
   const [source, setSource] = useState<Source>('designed')
   const [cinematic, setCinematic] = useState(true)
+  const [life, setLife] = useState(true)
   const [captions, setCaptions] = useState(false)
   const [music, setMusic] = useState('__none')
   const [imageModelReady, setImageModelReady] = useState<boolean | null>(null)
   const [webgpu, setWebgpu] = useState<string | null>(null)
+  /** An on-device video model, when one is installed (none ships today — see ai/videogen). */
+  const [clipModel, setClipModel] = useState<VideoGenerator | null>(null)
   const [edits, setEdits] = useState<Record<number, Partial<PlannedShot>>>({})
   const [mode, setMode] = useState<'replace' | 'append'>(project.scenes.length ? 'append' : 'replace')
   const [progress, setProgress] = useState<{ done: number; total: number; detail: string } | null>(null)
@@ -77,13 +107,17 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
     if (!open) return
     let alive = true
     void useDepthModel.getState().check()
+    void useCutoutModels.getState().check()
     void (async () => {
       const caps = await detectDeviceCapabilities()
       const ready = await isModelDownloaded(SD_TURBO)
+      const clips = await readyVideoGenerator()
       if (!alive) return
       setWebgpu(caps.webgpu.available && caps.webgpu.shaderF16 ? null : (caps.webgpu.reason ?? 'This GPU lacks shader-f16 support.'))
       setImageModelReady(ready)
-      if (ready && caps.webgpu.available) setSource('generate')
+      setClipModel(clips)
+      if (clips) setSource('clips')
+      else if (ready && caps.webgpu.available) setSource('generate')
       else if (pictures.length) setSource('imported')
     })()
     return () => {
@@ -98,7 +132,9 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
   const running = progress !== null
   const canGenerate = imageModelReady === true && webgpu === null
   const depthReady = depthModel.status === 'ready'
-  const usesPictures = source !== 'designed'
+  const cutoutReady = cutoutModels.status === 'ready'
+  const usesPictures = source === 'generate' || source === 'imported'
+  const animate = cinematic && life && usesPictures
 
   const build = async () => {
     if (!plan || !shots.length) return
@@ -106,8 +142,21 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
     const start = mode === 'append' ? project.scenes.length : 0
     const metas: (AssetMeta | undefined)[] = []
     try {
-      // 1. Pictures for each shot.
-      if (source === 'generate') {
+      // 1. Pictures (or clips) for each shot.
+      if (source === 'clips' && clipModel) {
+        const { width: cw, height: ch } = outputDimensions(project.aspectRatio, '720p')
+        for (let i = 0; i < shots.length; i++) {
+          if (cancelled.current) throw new Error('cancelled')
+          setProgress({ done: i, total: shots.length, detail: `Generating clip ${i + 1} of ${shots.length} with ${clipModel.label}…` })
+          const blob = await clipModel.generate(
+            { prompt: shots[i]!.imagePrompt, seconds: shots[i]!.duration, width: cw, height: ch, fps: project.output.fps, seed: hashString(plan.subject) + i },
+            (f) => setProgress({ done: i + f, total: shots.length, detail: `Generating clip ${i + 1} of ${shots.length} with ${clipModel.label}…` }),
+          )
+          const file = new File([blob], `${plan.subject.slice(0, 32).replace(/[^\w-]+/g, '-')}-${i + 1}.${blob.type.includes('webm') ? 'webm' : 'mp4'}`, { type: blob.type || 'video/mp4' })
+          const [meta] = await importIntoProject([file], { origin: 'generated', generator: { model: clipModel.label, prompt: shots[i]!.imagePrompt }, quiet: true })
+          metas.push(meta)
+        }
+      } else if (source === 'generate') {
         setProgress({ done: 0, total: shots.length, detail: 'Loading the image model onto the GPU…' })
         await imageGen.load()
         const baseSeed = hashString(plan.subject) % 1_000_000
@@ -127,7 +176,7 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
         shots.forEach((_, i) => metas.push(pictures[i % pictures.length]))
       }
 
-      // 2. Depth for cinematic 3D motion (once per distinct picture).
+      // 2. Depth for cinematic 3D motion, and the subject cut out to move on its own (once per distinct picture).
       const depths = new Map<string, DepthAnalysis>()
       if (cinematic && usesPictures && depthReady) {
         const distinct = [...new Set(metas.filter((m): m is AssetMeta => !!m).map((m) => m.id))]
@@ -136,6 +185,15 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
           setProgress({ done: i, total: distinct.length, detail: `Measuring depth ${i + 1} of ${distinct.length}…` })
           depths.set(distinct[i]!, await analyzeDepth(distinct[i]!))
           getPreviewEngine()?.refreshDepth(distinct[i]!)
+        }
+        if (animate && cutoutReady) {
+          for (let i = 0; i < distinct.length; i++) {
+            if (cancelled.current) throw new Error('cancelled')
+            setProgress({ done: i, total: distinct.length, detail: `Cutting out the subject ${i + 1} of ${distinct.length} and painting in the background…` })
+            depths.set(distinct[i]!, await analyzeCutout(distinct[i]!))
+            getPreviewEngine()?.refreshDepth(distinct[i]!)
+          }
+          void useCutoutModels.getState().refresh(distinct)
         }
       }
 
@@ -150,15 +208,36 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
         scene.look = { ...look }
         if (!meta) {
           scene.background = createGeneratedBackground(DESIGNED_STYLES[i % DESIGNED_STYLES.length]!, paletteFor(start + i + 3), hashString(scene.id))
+        } else if (meta.kind === 'video') {
+          // A generated clip already moves: no virtual camera on top.
+          scene.motion = { ...scene.motion, preset: 'none' }
         } else if (scene.background.kind === 'media') {
           const depth = depths.get(meta.id)
-          const crop = framingCrop(direction.framing, depth?.subjectBox ?? null, meta.width ?? 512, meta.height ?? 512, width / height, i)
+          // With a cut-out, the subject acts: framing keeps its whole body in view when it moves.
+          const actor = animate && depth?.cutout?.actors.length ? depth.cutout.actors[0]! : null
+          const subject = actor ? directSubject(prompt, shot.title) : null
+          const box = actor?.box ?? depth?.subjectBox ?? null
+          const crop = framingCrop(subject?.framing ?? direction.framing, box, meta.width ?? 512, meta.height ?? 512, width / height, i)
           if (crop) {
             scene.background.fit = 'crop'
             scene.background.crop = crop
           }
           if (cinematic && depth) {
-            scene.cinematic = { ...defaultCinematic(), enabled: true, camera: direction.camera, intensity: 0.55, focus: direction.focus, foliage: true, haze: direction.haze }
+            const action = subject?.action ?? 'none'
+            const facing = facingFor(box, crop)
+            const travels = action === 'run' || action === 'walk'
+            scene.cinematic = {
+              ...defaultCinematic(),
+              enabled: true,
+              camera: travels ? trackingCamera(facing) : (subject?.camera ?? direction.camera),
+              intensity: travels ? 0.45 : 0.55,
+              focus: direction.focus,
+              foliage: true,
+              haze: direction.haze,
+              subject: { action, amount: subject?.amount ?? 0.6, direction: facing },
+              // The football needs someone to play with.
+              props: propsForShot(prompt, shot.title, action).filter((p) => p !== 'football' || actor !== null),
+            }
           } else {
             scene.motion = { preset: i % 3 === 2 ? 'parallax' : 'kenBurns', intensity: 0.55, easing: 'easeInOut' }
           }
@@ -170,6 +249,15 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
         }
         return scene
       })
+      // Cinema bars would cover a cut-out subject's head in some shots: then use none in any (consistent look).
+      const bar = look.letterbox && project.aspectRatio === '16:9' ? Math.max(0.06, (1 - 16 / 9 / 2.39) / 2) : 0
+      const headUnderBar = scenes.some((sc) => {
+        if (sc.background.kind !== 'media' || sc.cinematic.subject.action === 'none') return false
+        const top = depths.get(sc.background.assetId)?.cutout?.actors[0]?.box[1]
+        const crop = sc.background.fit === 'crop' ? sc.background.crop : { x: 0, y: 0, width: 1, height: 1 }
+        return top !== undefined && (top - crop.y) / crop.height < bar + 0.03
+      })
+      if (headUnderBar) for (const sc of scenes) sc.look.letterbox = false
       const musicMeta = audios.find((a) => a.id === music)
       apply(
         (d) => {
@@ -253,6 +341,16 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
 
             <fieldset className="grid gap-2" disabled={running}>
               <legend className="mb-1 text-xs text-muted-foreground">Pictures for each shot</legend>
+              {clipModel ? (
+                <SourceOption
+                  active={source === 'clips'}
+                  onSelect={() => setSource('clips')}
+                  title={`Generate video clips (${clipModel.label})`}
+                  badge={`${clipModel.license.name} · on this device`}
+                  description="A generated clip for every shot, made on this device. Prompts never leave it."
+                  testId="source-clips"
+                />
+              ) : null}
               <SourceOption
                 active={source === 'generate'}
                 disabled={!canGenerate}
@@ -319,6 +417,34 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
                     </span>
                   </div>
                 ) : null}
+                {cinematic ? (
+                  <>
+                    <SwitchField
+                      label="Bring the subject to life"
+                      hint="Cuts the subject out so it can walk, run, jump, dance or kick over a painted-in background, and adds props such as a football or birds."
+                      checked={life}
+                      onChange={setLife}
+                      testId="prompt-life"
+                    />
+                    {life && cutoutModels.status === 'absent' ? (
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                        <PersonStanding className="size-3.5" /> Needs the cut-out models (IS-Net, Apache-2.0 · MI-GAN, MIT — {formatBytes(CUTOUT_BYTES)}),
+                        downloaded once from huggingface.co.
+                        <Button size="xs" variant="secondary" onClick={() => void cutoutModels.download()} data-testid="prompt-cutout-download">
+                          <Download /> Download
+                        </Button>
+                      </div>
+                    ) : null}
+                    {life && cutoutModels.status === 'downloading' ? (
+                      <div className="grid gap-1">
+                        <Progress value={cutoutModels.total ? (cutoutModels.loaded / cutoutModels.total) * 100 : 0} />
+                        <span className="text-[11px] text-muted-foreground tabular">
+                          Downloading cut-out models · {formatBytes(cutoutModels.loaded)} of {formatBytes(cutoutModels.total)}
+                        </span>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             ) : null}
             <SwitchField label="Captions" hint="On-screen text for each shot (off = visuals only)." checked={captions} onChange={setCaptions} testId="prompt-captions" />
@@ -337,6 +463,8 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
                 <ol className="grid gap-1.5" data-testid="prompt-shots">
                   {shots.map((shot, i) => {
                     const direction = directShot(shot.title, i)
+                    const acting = animate ? directSubject(prompt, shot.title) : null
+                    const props = cinematic && usesPictures ? propsForShot(prompt, shot.title, acting?.action ?? 'none') : []
                     return (
                       <li key={i} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2 rounded-md border p-2">
                         <span className="mt-1 text-xs font-semibold text-muted-foreground tabular">{i + 1}</span>
@@ -344,8 +472,14 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
                           <div className="flex flex-wrap items-center gap-1.5 text-xs">
                             <span className="font-medium">{shot.title}</span>
                             <Badge variant="secondary" className="font-normal">
-                              {direction.framing} · {direction.camera.replace(/([A-Z])/g, ' $1').toLowerCase()}
+                              {acting?.framing ?? direction.framing} · {direction.camera.replace(/([A-Z])/g, ' $1').toLowerCase()}
                             </Badge>
+                            {acting && acting.action !== 'none' ? (
+                              <Badge variant="outline" className="font-normal" data-testid="shot-action">
+                                subject {ACTION_LABEL[acting.action]}
+                              </Badge>
+                            ) : null}
+                            {props.length ? <span aria-label={`Props: ${props.join(', ')}`}>{props.map((p) => PROP_ICON[p]).join(' ')}</span> : null}
                           </div>
                           {source === 'generate' ? (
                             <Input
@@ -375,9 +509,9 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
 
             <p className="flex gap-2 rounded-md bg-muted/40 p-2 text-[11px] leading-relaxed text-muted-foreground">
               <Info className="mt-0.5 size-3.5 shrink-0" />
-              Shots are filmed from still pictures by a virtual 3D camera — people and objects in them don't move on their own (no text-to-video model
-              runs in a browser yet). The local image model draws generic scenes well but not specific characters; publishing copyrighted characters
-              may need permission.
+              Shots are filmed from still pictures by a virtual 3D camera. With the cut-out models, the subject moves as a whole — it walks, runs,
+              jumps, dances or kicks — but arms and legs don't bend (no text-to-video model runs in a browser yet). The local image model draws
+              generic scenes well but not specific characters; publishing copyrighted characters may need permission.
             </p>
           </div>
         </ScrollArea>
@@ -413,7 +547,7 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
           ) : (
             <Button
               onClick={() => void build()}
-              disabled={!plan || (source === 'generate' && !canGenerate) || depthModel.status === 'downloading'}
+              disabled={!plan || (source === 'generate' && !canGenerate) || depthModel.status === 'downloading' || cutoutModels.status === 'downloading'}
               data-testid="prompt-create"
             >
               {source === 'generate' ? <Sparkles /> : <Wand2 />} Create video
