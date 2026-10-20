@@ -70,12 +70,13 @@ class ImageGenClient {
     })
   }
 
-  generate(prompt: string, seed: number): Promise<GeneratedImage> {
+  /** Generate a picture; `size` (multiples of 64 px) defaults to the model's native 512×512. */
+  generate(prompt: string, seed: number, size?: { width: number; height: number }): Promise<GeneratedImage> {
     const worker = this.ensureWorker()
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject })
-      worker.postMessage({ type: 'generate', id, prompt, seed })
+      worker.postMessage({ type: 'generate', id, prompt, seed, ...size })
     })
   }
 
@@ -90,3 +91,14 @@ class ImageGenClient {
 }
 
 export const imageGen = new ImageGenClient()
+
+/**
+ * Picture size for a frame shape: about SD-Turbo's native pixel count (512²–
+ * 1.3×), in multiples of 64, so a 16:9 or 9:16 video shows the whole picture
+ * instead of a cropped middle.
+ */
+export function generationSize(aspect: '16:9' | '9:16' | '1:1'): { width: number; height: number } {
+  if (aspect === '16:9') return { width: 768, height: 448 }
+  if (aspect === '9:16') return { width: 448, height: 768 }
+  return { width: 512, height: 512 }
+}

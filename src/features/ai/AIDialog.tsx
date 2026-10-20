@@ -19,6 +19,7 @@ import { SelectField, SliderField } from '../editor/fields'
 import { importIntoProject } from '../editor/mediaImport'
 import { MOTION_OPTIONS } from '../editor/props/shared'
 import { ImageGenerationPanel } from './ImageGenerationPanel'
+import { ModelsList } from './ModelsList'
 import { SCENE_TEMPLATES } from './sceneTemplates'
 
 type Tab = 'scenes' | 'motion' | 'images' | 'device'
@@ -278,6 +279,7 @@ function DeviceTab() {
       <p className="text-xs text-muted-foreground">
         The editor and MP4 export never need these. Local image generation needs WebGPU; without it, use designed scenes or import images.
       </p>
+      <ModelsList />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { detectDeviceCapabilities } from '../capabilities'
-import { CUTOUT_MODEL, CUTOUT_MODELS, DEPTH_CPU, DEPTH_GPU, type ModelManifest } from '../models'
+import { CUTOUT_MODEL, CUTOUT_MODELS, DEPTH_CPU, DEPTH_GPU, UPSCALE_MODEL, type ModelManifest } from '../models'
 import { isModelDownloaded } from '../modelStore'
 import { getAnalyses, getAssetBlob, putAnalysis } from '@/storage/repo'
 import { CUTOUT_VERSION, DEPTH_ANALYSIS_VERSION, type CutoutActor, type DepthAnalysis, type SubjectCutout } from '@/storage/db'
@@ -49,7 +49,7 @@ function ensureWorker(): Worker {
   if (worker) return worker
   const w = new Worker(new URL('./depth.worker.ts', import.meta.url), { type: 'module' })
   w.onmessage = (e: MessageEvent) => {
-    const msg = e.data as { type: 'result' | 'cutout' | 'error'; id: number; message?: string }
+    const msg = e.data as { type: 'result' | 'cutout' | 'upscaled' | 'error'; id: number; message?: string }
     const p = pending.get(msg.id)
     if (!p) return
     pending.delete(msg.id)
@@ -170,6 +170,24 @@ export async function analyzeCutout(assetId: string, options: { force?: boolean 
   }
   await putAnalysis(record)
   return record
+}
+
+/** The ×2 upscaler needs WebGPU (on the CPU a single tile takes over a minute). */
+export async function canUpscale(): Promise<boolean> {
+  return (await detectDeviceCapabilities()).webgpu.available
+}
+
+export async function isUpscaleModelReady(): Promise<boolean> {
+  return isModelDownloaded(UPSCALE_MODEL)
+}
+
+/** Double a picture's resolution on this device (JPEG out). */
+export async function upscalePicture(blob: Blob): Promise<Blob> {
+  if (!(await canUpscale())) throw new Error('Sharpening pictures needs WebGPU, which this browser or device lacks.')
+  if (!(await isUpscaleModelReady())) throw new Error('The sharpening model is not downloaded yet.')
+  const bitmap = await createImageBitmap(blob)
+  const result = await request<{ blob: Blob }>({ type: 'upscale', bitmap }, [bitmap])
+  return result.blob
 }
 
 export function stopDepthWorker(): void {

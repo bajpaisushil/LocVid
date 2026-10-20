@@ -47,6 +47,51 @@ export class ModelDownloadError extends Error {
   }
 }
 
+/** How long a download may go without receiving any data before it counts as stalled. */
+export const STALL_MS = 45_000
+
+/** Aborts its signal when `poke()` hasn't been called for `ms` milliseconds. */
+export class StallWatch {
+  readonly signal: AbortSignal
+  fired = false
+  private readonly controller = new AbortController()
+  private readonly ms: number
+  private timer: ReturnType<typeof setTimeout> | null = null
+
+  constructor(ms: number) {
+    this.ms = ms
+    this.signal = this.controller.signal
+    this.poke()
+  }
+
+  poke(): void {
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = setTimeout(() => {
+      this.fired = true
+      this.controller.abort(new DOMException('Download stalled', 'TimeoutError'))
+    }, this.ms)
+  }
+
+  stop(): void {
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+  }
+}
+
+/** A signal that aborts when any of `signals` does (AbortSignal.any where available). */
+export function anySignal(signals: AbortSignal[]): AbortSignal {
+  if ('any' in AbortSignal) return (AbortSignal as unknown as { any(s: AbortSignal[]): AbortSignal }).any(signals)
+  const controller = new AbortController()
+  for (const s of signals) {
+    if (s.aborted) {
+      controller.abort(s.reason)
+      break
+    }
+    s.addEventListener('abort', () => controller.abort(s.reason), { once: true })
+  }
+  return controller.signal
+}
+
 export async function downloadModel(model: ModelManifest, onProgress: (p: DownloadProgress) => void, signal: AbortSignal): Promise<void> {
   if (!hasCacheStorage()) throw new ModelDownloadError('This browser does not support Cache Storage, so models cannot be stored.')
   const cache = await caches.open(CACHE_NAME)
@@ -70,17 +115,28 @@ export async function downloadModel(model: ModelManifest, onProgress: (p: Downlo
   for (const file of model.files) {
     if (present.has(file.path)) continue
     const url = fileUrl(model, file)
+    // A connection can stall without erroring; give up on a file that sends nothing for a while.
+    const stall = new StallWatch(STALL_MS)
+    const fileSignal = anySignal([signal, stall.signal])
+    const stalledError = () =>
+      new ModelDownloadError(`The download of ${file.path} stalled (no data for ${STALL_MS / 1000} s). Check your connection and try again; finished files are kept.`)
     let response: Response
     try {
-      response = await fetch(url, { signal, credentials: 'omit', referrerPolicy: 'no-referrer' })
+      response = await fetch(url, { signal: fileSignal, credentials: 'omit', referrerPolicy: 'no-referrer' })
     } catch (error) {
+      stall.stop()
       if (signal.aborted) throw error
+      if (stall.fired) throw stalledError()
       throw new ModelDownloadError(`Network error while downloading ${file.path}. Check your connection and try again; finished files are kept.`, { cause: error })
     }
-    if (!response.ok || !response.body) throw new ModelDownloadError(`Download of ${file.path} failed (HTTP ${response.status}).`)
+    if (!response.ok || !response.body) {
+      stall.stop()
+      throw new ModelDownloadError(`Download of ${file.path} failed (HTTP ${response.status}).`)
+    }
     let loaded = 0
     const counter = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
+        stall.poke()
         loaded += chunk.byteLength
         onProgress({ loaded: done + loaded, total, file: file.path })
         controller.enqueue(chunk)
@@ -88,15 +144,18 @@ export async function downloadModel(model: ModelManifest, onProgress: (p: Downlo
     })
     try {
       // Streamed into the cache — the file never has to fit in memory. A failed or aborted put stores nothing.
-      await cache.put(url, new Response(response.body.pipeThrough(counter, { signal }), { headers: { 'content-type': 'application/octet-stream' } }))
+      await cache.put(url, new Response(response.body.pipeThrough(counter, { signal: fileSignal }), { headers: { 'content-type': 'application/octet-stream' } }))
     } catch (error) {
       if (signal.aborted) throw error
+      if (stall.fired) throw stalledError()
       throw new ModelDownloadError(
         error instanceof DOMException && error.name === 'QuotaExceededError'
           ? 'Browser storage filled up during the download. Free some space and try again.'
           : `Saving ${file.path} failed: ${(error as Error).message}`,
         { cause: error },
       )
+    } finally {
+      stall.stop()
     }
     const stored = await cache.match(url)
     const size = stored ? (await stored.blob()).size : 0

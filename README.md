@@ -51,7 +51,8 @@ npm run preview    # serves dist/ at http://localhost:4173
 - The production build ships a Content-Security-Policy that limits network access to the app's own origin and the Hugging Face model
   hub (plus any binary host you configure, see *Deploying*). It is enforced by the browser, not just promised.
 - Models are downloaded only after you click a download button that states the model, its license and its exact size. Requests carry
-  no cookies and no referrer; files are pinned to exact repository revisions and verified byte for byte.
+  no cookies and no referrer; files are pinned to exact repository revisions and verified byte for byte. *AI tools → Device check*
+  lists every model with its size and license and deletes any of them.
 - Prompts and pictures are processed on your device. Nothing is sent anywhere.
 
 ## On-device models (all optional)
@@ -61,7 +62,8 @@ npm run preview    # serves dist/ at http://localhost:4173
 | [Depth Anything V2 Small](https://huggingface.co/onnx-community/depth-anything-v2-small) | Depth maps → cinematic 3D motion | 49.6 MB (GPU, fp16) or 27.3 MB (CPU, int8) | Apache-2.0 |
 | [IS-Net general use](https://huggingface.co/jellybox/isnet-general-use) ([DIS](https://github.com/xuebinqin/DIS)) | Cutting the subject out | 178.6 MB | Apache-2.0 |
 | [MI-GAN](https://huggingface.co/andraniksargsyan/migan) ([Picsart AI Research](https://github.com/Picsart-AI-Research/MI-GAN)) | Painting the background behind the subject | 28.1 MB | MIT (code and weights) |
-| [SD-Turbo](https://huggingface.co/schmuell/sd-turbo-ort-web) | Generating a 512×512 picture per shot | 2.5 GB | [Stability AI Community License](https://huggingface.co/stabilityai/sd-turbo/blob/main/LICENSE.md) |
+| [RealPLKSR ×2](https://huggingface.co/darktable-org/upscale-realplksr-onnx) ([PLKSR](https://github.com/dslisleedh/PLKSR)) | Doubling the resolution of generated pictures (sharper close-ups; WebGPU) | 29.6 MB | MIT |
+| [SD-Turbo](https://huggingface.co/schmuell/sd-turbo-ort-web) | Generating a picture per shot, in the video’s shape (768×448 for 16:9, 448×768 for 9:16, 512×512 square) | 2.5 GB | [Stability AI Community License](https://huggingface.co/stabilityai/sd-turbo/blob/main/LICENSE.md) |
 
 All run with ONNX Runtime Web — WebGPU when available, otherwise WebAssembly on the CPU (except SD-Turbo, which needs WebGPU).
 Without any model, LocVid still edits, animates (2D pan/zoom, parallax cards, designed backgrounds) and exports.
@@ -127,12 +129,15 @@ LOCVID_E2E_MODEL=1 LOCVID_E2E_PROFILE=~/.locvid-e2e npx playwright test e2e/cine
                                    # opt-in: real model downloads (~2.8 GB, cached in the profile) and inference
 ```
 
-Results on 20 October 2026 (Chrome 155, macOS 26, Apple M4):
+Results on 21 October 2026 (Chrome 155, macOS 26, Apple M4):
 
-- Unit tests (Vitest): **150 passed**.
+- Unit tests (Vitest): **156 passed**.
 - End-to-end (Playwright): **22 passed**; 3 opt-in model tests skipped by default.
-- Opt-in model tests: **3 passed** — depth model + moving camera + export; cut-out models + a subject that moves while the background
-  stays identical + football + export; SD-Turbo download and generation on WebGPU.
+- Opt-in model tests, with fresh downloads: **3 passed** — depth model + moving camera + export; cut-out models + a subject that moves
+  while the background stays identical + football + export; SD-Turbo download and generation on WebGPU in the video's shape (768×448)
+  and square (512×512).
+- A full no-photos run of *Describe your video* (4 shots: SD-Turbo pictures, ×2 sharpening, depth, cut-outs, subject actions, props)
+  took 79 s to create and 2 s to export at 720p.
 - Exports are verified with `ffprobe`/`ffmpeg` when available (codecs, frame counts, clean decode, colors, audio levels).
 
 ## Deploying for free (static hosting)

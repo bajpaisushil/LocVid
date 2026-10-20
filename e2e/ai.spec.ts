@@ -44,5 +44,11 @@ test('the editor works without optional AI, and no model is fetched unless asked
 
   await page.getByTestId('ai-tab-device').click()
   await expect(page.getByTestId('device-report')).toContainText('WebGPU')
+  // Every optional model is listed with its size and license; none is stored in a fresh browser.
+  const models = page.getByTestId('models-list').locator('li')
+  await expect(models).toHaveCount(6)
+  await expect(page.getByTestId('model-isnet-general-use')).toContainText('170 MB')
+  await expect(page.getByTestId('model-isnet-general-use')).toContainText('Apache-2.0')
+  await expect(page.getByTestId('models-list').getByText('Not downloaded')).toHaveCount(6)
   expect(modelRequests).toEqual([])
 })

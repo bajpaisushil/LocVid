@@ -1,8 +1,9 @@
 import type * as OrtTypes from 'onnxruntime-web'
-import { CUTOUT_MODEL, DEPTH_CPU, DEPTH_GPU, INPAINT_MODEL, type ModelManifest } from '../models'
+import { CUTOUT_MODEL, DEPTH_CPU, DEPTH_GPU, INPAINT_MODEL, UPSCALE_MODEL, type ModelManifest } from '../models'
 import { readModelFile } from '../modelStore'
 import { configureOrt } from '../ortEnv'
 import { actorDisparity, alignDepth, featherMask, groundDepth, layoutCutout, normalizeMatte, resampleNearest } from './cutoutPost'
+import { rampWeight, tileGrid } from './tiles'
 import { depthInputSize, farRegionMask, layeredDepth, luminanceGradient, normalizeDisparity, spreadTexture, subjectBox, subjectDisparity } from './depthPost'
 
 /**
@@ -10,9 +11,10 @@ import { depthInputSize, farRegionMask, layeredDepth, luminanceGradient, normali
  *  - Depth Anything V2 (Small): WebGPU when available (fp16 model), otherwise
  *    WebAssembly on the CPU (int8 model);
  *  - IS-Net + MI-GAN "cut-out": the subject's matte and a clean background
- *    plate with the subject painted out, plus the plate's own depth.
- *   in:  { type: 'analyze', id, bitmap, variant } | { type: 'cutout', id, bitmap, variant, segment, depth }
- *   out: { type: 'result' | 'cutout', id, ... } | { type: 'error', id, message }
+ *    plate with the subject painted out, plus the plate's own depth;
+ *  - RealPLKSR ×2: doubles a small picture's resolution (WebGPU).
+ *   in:  { type: 'analyze' | 'cutout' | 'upscale', id, bitmap, ... }
+ *   out: { type: 'result' | 'cutout' | 'upscaled', id, ... } | { type: 'error', id, message }
  */
 
 interface Scope {
@@ -212,8 +214,71 @@ async function cutout({ bitmap, variant, segment, depth: original }: CutoutReque
   }
 }
 
+const TILE = 512
+
+/** Double a picture's resolution with the ×2 model: overlapping 512² tiles, blended across the overlaps. */
+async function upscale(bitmap: ImageBitmap): Promise<Blob> {
+  const { ort, session } = await getSession(UPSCALE_MODEL, 'webgpu')
+  const W = bitmap.width
+  const H = bitmap.height
+  // Pictures smaller than a tile are edge-extended to one (the padding is cropped off again).
+  const PW = Math.max(W, TILE)
+  const PH = Math.max(H, TILE)
+  const src = canvas2d(PW, PH)
+  src.ctx.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  if (PW > W) src.ctx.drawImage(src.canvas, W - 1, 0, 1, H, W, 0, PW - W, H)
+  if (PH > H) src.ctx.drawImage(src.canvas, 0, H - 1, PW, 1, 0, H, PW, PH - H)
+  const pixels = src.ctx.getImageData(0, 0, PW, PH).data
+  const OW = PW * 2
+  const OH = PH * 2
+  const out = TILE * 2
+  const acc = new Float32Array(OW * OH * 3)
+  const weights = new Float32Array(OW * OH)
+  const plane = TILE * TILE
+  for (const tile of tileGrid(PW, PH, TILE, 48)) {
+    const input = new Float32Array(plane * 3)
+    for (let y = 0; y < TILE; y++) {
+      for (let x = 0; x < TILE; x++) {
+        const s = ((tile.y + y) * PW + tile.x + x) * 4
+        const d = y * TILE + x
+        for (let c = 0; c < 3; c++) input[c * plane + d] = pixels[s + c]! / 255
+      }
+    }
+    const result = await session.run({ input: new ort.Tensor('float32', input, [1, 3, TILE, TILE]) })
+    const data = (await result.output!.getData()) as Float32Array
+    result.output!.dispose()
+    const oplane = out * out
+    for (let y = 0; y < out; y++) {
+      const wy = rampWeight(y, tile.y * 2, out, OH, 96)
+      for (let x = 0; x < out; x++) {
+        const w = wy * rampWeight(x, tile.x * 2, out, OW, 96)
+        const o = (tile.y * 2 + y) * OW + tile.x * 2 + x
+        const i = y * out + x
+        for (let c = 0; c < 3; c++) acc[o * 3 + c] = acc[o * 3 + c]! + data[c * oplane + i]! * w
+        weights[o] = weights[o]! + w
+      }
+    }
+  }
+  const rgba = new Uint8ClampedArray(W * 2 * H * 2 * 4)
+  for (let y = 0; y < H * 2; y++) {
+    for (let x = 0; x < W * 2; x++) {
+      const o = y * OW + x
+      const d = (y * W * 2 + x) * 4
+      for (let c = 0; c < 3; c++) rgba[d + c] = (acc[o * 3 + c]! / weights[o]!) * 255
+      rgba[d + 3] = 255
+    }
+  }
+  const canvas = new OffscreenCanvas(W * 2, H * 2)
+  canvas.getContext('2d')!.putImageData(new ImageData(rgba, W * 2, H * 2), 0, 0)
+  return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.94 })
+}
+
 scope.onmessage = async (event: MessageEvent) => {
-  const msg = event.data as { type: 'analyze'; id: number; bitmap: ImageBitmap; variant: Variant } | ({ type: 'cutout'; id: number } & CutoutRequest)
+  const msg = event.data as
+    | { type: 'analyze'; id: number; bitmap: ImageBitmap; variant: Variant }
+    | ({ type: 'cutout'; id: number } & CutoutRequest)
+    | { type: 'upscale'; id: number; bitmap: ImageBitmap }
   try {
     if (msg.type === 'analyze') {
       const r = await analyze(msg.bitmap, msg.variant)
@@ -222,6 +287,8 @@ scope.onmessage = async (event: MessageEvent) => {
         { type: 'result', id: msg.id, ...r, depth: r.depth.buffer, far: r.far.buffer, fill: r.fill.buffer, bgDepth: r.bgDepth.buffer, hole: r.hole.buffer },
         buffers,
       )
+    } else if (msg.type === 'upscale') {
+      scope.postMessage({ type: 'upscaled', id: msg.id, blob: await upscale(msg.bitmap) })
     } else if (msg.type === 'cutout') {
       const r = await cutout(msg)
       if (!r) {

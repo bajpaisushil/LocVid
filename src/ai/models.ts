@@ -31,7 +31,7 @@ export const SD_TURBO: ImageModel = {
   id: 'sd-turbo',
   name: 'SD-Turbo',
   publisher: 'Stability AI (ONNX conversion for ONNX Runtime Web by schmuell)',
-  description: 'A distilled Stable Diffusion 2.1 that produces a 512×512 image from a text prompt in a single step.',
+  description: 'A distilled Stable Diffusion 2.1 that draws a picture from a text prompt in a single step (512×512, or in the video’s shape).',
   license: {
     name: 'Stability AI Community License',
     url: 'https://huggingface.co/stabilityai/sd-turbo/blob/main/LICENSE.md',
@@ -131,3 +131,24 @@ export const INPAINT_MODEL: ModelManifest = {
 
 /** Both models needed to animate a subject, downloaded together. */
 export const CUTOUT_MODELS: readonly ModelManifest[] = [CUTOUT_MODEL, INPAINT_MODEL]
+
+/**
+ * RealPLKSR ×2 (MSSIM-trained, no GAN: it sharpens without inventing detail).
+ * Doubles the resolution of small pictures — e.g. 768×448 generated ones — so
+ * close-ups stay crisp. Fixed 512×512 tiles; WebGPU only (the CPU is too slow).
+ */
+export const UPSCALE_MODEL: ModelManifest = {
+  id: 'realplksr-x2',
+  name: 'RealPLKSR ×2',
+  publisher: 'Dongheon Lee et al. (ONNX by darktable)',
+  description: 'Doubles the resolution of small pictures so close-ups stay sharp.',
+  license: {
+    name: 'MIT',
+    url: 'https://github.com/dslisleedh/PLKSR',
+    summary: 'Permissive: free for personal and commercial use.',
+  },
+  repo: 'darktable-org/upscale-realplksr-onnx',
+  revision: '0bb636eeeed5fffd256571c3cc440d9fdf62467e',
+  files: [{ path: 'onnx/model_x2.onnx', bytes: 29_627_920 }],
+  speed: 'About 4–5 s per 512×512 tile on a recent laptop GPU (two tiles for a 768×448 picture).',
+}

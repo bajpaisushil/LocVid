@@ -39,34 +39,42 @@ test('downloads SD-Turbo on request and generates an image locally on WebGPU', a
       await expect(prompt).toBeVisible({ timeout: 55 * 60 * 1000 })
     }
 
+    // Real pictures with actual content (not a flat color), in the video's shape by default.
+    const measure = (img: ReturnType<typeof panel.locator>) =>
+      img.evaluate(async (el: HTMLImageElement) => {
+        await el.decode()
+        const c = document.createElement('canvas')
+        c.width = el.naturalWidth
+        c.height = el.naturalHeight
+        const ctx = c.getContext('2d')!
+        ctx.drawImage(el, 0, 0)
+        const d = ctx.getImageData(0, 0, c.width, c.height).data
+        let sum = 0
+        let sumSq = 0
+        for (let i = 0; i < d.length; i += 4) {
+          const l = 0.2126 * d[i]! + 0.7152 * d[i + 1]! + 0.0722 * d[i + 2]!
+          sum += l
+          sumSq += l * l
+        }
+        const n = d.length / 4
+        return { width: c.width, height: c.height, std: Math.sqrt(sumSq / n - (sum / n) ** 2), src: c.toDataURL('image/png') }
+      })
+    const results = panel.getByTestId('imagegen-results').locator('img')
     await prompt.fill('a lighthouse on a rocky coast at sunset, photograph')
     await panel.getByTestId('imagegen-generate').click()
-    const result = panel.getByTestId('imagegen-results').locator('img').first()
-    await expect(result).toBeVisible({ timeout: 10 * 60 * 1000 })
+    await expect(results.first()).toBeVisible({ timeout: 10 * 60 * 1000 })
+    const wide = await measure(results.first())
+    expect([wide.width, wide.height]).toEqual([768, 448])
+    expect(wide.std).toBeGreaterThan(12)
+    await test.info().attach('generated-16x9.png', { body: Buffer.from(wide.src.split(',')[1]!, 'base64'), contentType: 'image/png' })
 
-    // The output is a real 512×512 image with actual content (not a flat color).
-    const stats = await result.evaluate(async (img: HTMLImageElement) => {
-      await img.decode()
-      const c = document.createElement('canvas')
-      c.width = img.naturalWidth
-      c.height = img.naturalHeight
-      const ctx = c.getContext('2d')!
-      ctx.drawImage(img, 0, 0)
-      const d = ctx.getImageData(0, 0, c.width, c.height).data
-      let sum = 0
-      let sumSq = 0
-      for (let i = 0; i < d.length; i += 4) {
-        const l = 0.2126 * d[i]! + 0.7152 * d[i + 1]! + 0.0722 * d[i + 2]!
-        sum += l
-        sumSq += l * l
-      }
-      const n = d.length / 4
-      return { width: c.width, height: c.height, mean: sum / n, std: Math.sqrt(sumSq / n - (sum / n) ** 2), src: c.toDataURL('image/png') }
-    })
-    expect(stats.width).toBe(512)
-    expect(stats.height).toBe(512)
-    expect(stats.std).toBeGreaterThan(12)
-    await test.info().attach('generated.png', { body: Buffer.from(stats.src.split(',')[1]!, 'base64'), contentType: 'image/png' })
+    // Square on request (the model is re-specialized for the new size).
+    await panel.getByTestId('imagegen-shape').getByText('Square (512×512)').click()
+    await panel.getByTestId('imagegen-generate').click()
+    await expect(results).toHaveCount(2, { timeout: 10 * 60 * 1000 })
+    const square = await measure(results.first())
+    expect([square.width, square.height]).toEqual([512, 512])
+    expect(square.std).toBeGreaterThan(12)
 
     // Adding it to the project stores it as generated media.
     await panel.getByRole('button', { name: 'Scene' }).first().click()

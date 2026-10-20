@@ -8,14 +8,15 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Textarea } from '@/components/ui/textarea'
 import { detectDeviceCapabilities, type DeviceCapabilities } from '@/ai/capabilities'
-import { imageGen } from '@/ai/imagegen/client'
+import { generationSize, imageGen } from '@/ai/imagegen/client'
 import { deleteModel, downloadModel, isModelDownloaded, remainingBytes, type DownloadProgress } from '@/ai/modelStore'
 import { modelBytes, SD_TURBO } from '@/ai/models'
 import { createScene } from '@/core/defaults'
 import { addScenes } from '@/core/operations'
 import { errorMessage, isAbortError } from '@/lib/errors'
 import { formatBytes } from '@/lib/format'
-import { useEditorStore } from '@/state/editorStore'
+import { useEditorStore, useProject } from '@/state/editorStore'
+import { SegmentedField } from '../editor/fields'
 import { importIntoProject } from '../editor/mediaImport'
 
 type ModelState =
@@ -54,6 +55,9 @@ export function ImageGenerationPanel() {
   const [busy, setBusy] = useState<string | null>(null)
   const [loadProgress, setLoadProgress] = useState<{ detail: string; fraction: number } | null>(null)
   const [results, setResults] = useState<Result[]>([])
+  const [shape, setShape] = useState<'frame' | 'square'>('frame')
+  const frameSize = generationSize(useProject().aspectRatio)
+  const size = shape === 'frame' ? frameSize : { width: 512, height: 512 }
   const download = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -107,7 +111,7 @@ export function ImageGenerationPanel() {
         await imageGen.load()
       }
       setBusy('Generating…')
-      const { blob, ms } = await imageGen.generate(text, seed)
+      const { blob, ms } = await imageGen.generate(text, seed, size)
       setResults((r) => [{ url: URL.createObjectURL(blob), blob, prompt: text, seed, ms }, ...r].slice(0, 8))
       setSeed(Math.floor(Math.random() * 1e6))
     } catch (error) {
@@ -179,7 +183,8 @@ export function ImageGenerationPanel() {
         <div>
           <dt className="inline text-muted-foreground">Output: </dt>
           <dd className="inline">
-            {model.output.width}×{model.output.height} (square — use “Contain” or parallax in 16:9/9:16)
+            {generationSize('16:9').width}×{generationSize('16:9').height} for 16:9 videos, {generationSize('9:16').width}×{generationSize('9:16').height} for
+            9:16, or {model.output.width}×{model.output.height} square
           </dd>
         </div>
         <div className="sm:col-span-2">
@@ -235,6 +240,16 @@ export function ImageGenerationPanel() {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void generate()
             }}
           />
+          <SegmentedField<'frame' | 'square'>
+            label="Shape"
+            value={shape}
+            options={[
+              { value: 'frame', label: `Fits the video (${frameSize.width}×${frameSize.height})` },
+              { value: 'square', label: 'Square (512×512)' },
+            ]}
+            onChange={setShape}
+            testId="imagegen-shape"
+          />
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
               Seed
@@ -271,7 +286,7 @@ export function ImageGenerationPanel() {
             <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="imagegen-results">
               {results.map((r) => (
                 <li key={r.url} className="grid gap-1">
-                  <img src={r.url} alt={r.prompt} className="aspect-square w-full rounded-md object-cover" />
+                  <img src={r.url} alt={r.prompt} className="aspect-square w-full rounded-md bg-black/40 object-contain" />
                   <span className="truncate text-[10px] text-muted-foreground" title={`${r.prompt} · seed ${r.seed}`}>
                     {(r.ms / 1000).toFixed(1)} s · seed {r.seed}
                   </span>

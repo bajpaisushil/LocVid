@@ -9,11 +9,11 @@ import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
 import { detectDeviceCapabilities } from '@/ai/capabilities'
-import { imageGen } from '@/ai/imagegen/client'
+import { generationSize, imageGen } from '@/ai/imagegen/client'
 import { readyVideoGenerator, type VideoGenerator } from '@/ai/videogen/registry'
 import { isModelDownloaded } from '@/ai/modelStore'
 import { SD_TURBO } from '@/ai/models'
-import { analyzeCutout, analyzeDepth } from '@/ai/vision/depth'
+import { analyzeCutout, analyzeDepth, upscalePicture } from '@/ai/vision/depth'
 import { createAudioTrack, createGeneratedBackground, createOverlay, createScene, defaultCinematic, outputDimensions, paletteFor } from '@/core/defaults'
 import { applyStoryboard } from '@/core/operations'
 import { atmosphereForPrompt, directShot, directSubject, facingFor, framingCrop, lookForStyle, propsForShot, trackingCamera } from '@/core/storyboard/direction'
@@ -25,6 +25,7 @@ import { hashString } from '@/lib/id'
 import { cn } from '@/lib/utils'
 import { CUTOUT_BYTES, useCutoutModels } from '@/features/ai/cutoutModelStore'
 import { useDepthModel } from '@/features/ai/depthModelStore'
+import { UPSCALE_BYTES, useUpscaleModel } from '@/features/ai/upscaleModelStore'
 import { getPreviewEngine } from '@/features/editor/previewRegistry'
 import type { DepthAnalysis } from '@/storage/db'
 import { useEditorStore, useProject } from '@/state/editorStore'
@@ -80,12 +81,14 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
   const apply = useEditorStore((s) => s.apply)
   const depthModel = useDepthModel()
   const cutoutModels = useCutoutModels()
+  const upscaleModel = useUpscaleModel()
   const [prompt, setPrompt] = useState(initialPrompt)
   const [length, setLength] = useState('30')
   const [style, setStyle] = useState<VisualStyle>('cinematic')
   const [source, setSource] = useState<Source>('designed')
   const [cinematic, setCinematic] = useState(true)
   const [life, setLife] = useState(true)
+  const [sharpen, setSharpen] = useState(true)
   const [captions, setCaptions] = useState(false)
   const [music, setMusic] = useState('__none')
   const [imageModelReady, setImageModelReady] = useState<boolean | null>(null)
@@ -108,6 +111,7 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
     let alive = true
     void useDepthModel.getState().check()
     void useCutoutModels.getState().check()
+    void useUpscaleModel.getState().check()
     void (async () => {
       const caps = await detectDeviceCapabilities()
       const ready = await isModelDownloaded(SD_TURBO)
@@ -163,8 +167,15 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
         for (let i = 0; i < shots.length; i++) {
           if (cancelled.current) throw new Error('cancelled')
           setProgress({ done: i, total: shots.length, detail: `Generating picture ${i + 1} of ${shots.length}: ${shots[i]!.title}` })
-          const { blob } = await imageGen.generate(shots[i]!.imagePrompt, baseSeed + i * 7)
-          const file = new File([blob], `${plan.subject.slice(0, 32).replace(/[^\w-]+/g, '-')}-${i + 1}.png`, { type: 'image/png' })
+          // Drawn in the video's shape, so the whole picture is on screen (not a cropped middle).
+          let { blob } = await imageGen.generate(shots[i]!.imagePrompt, baseSeed + i * 7, generationSize(project.aspectRatio))
+          if (sharpen && upscaleModel.status === 'ready') {
+            // Twice the resolution, so close-ups of the picture stay crisp.
+            setProgress({ done: i + 0.5, total: shots.length, detail: `Sharpening picture ${i + 1} of ${shots.length}…` })
+            blob = await upscalePicture(blob)
+          }
+          const ext = blob.type === 'image/jpeg' ? 'jpg' : 'png'
+          const file = new File([blob], `${plan.subject.slice(0, 32).replace(/[^\w-]+/g, '-')}-${i + 1}.${ext}`, { type: blob.type || 'image/png' })
           const [meta] = await importIntoProject([file], {
             origin: 'generated',
             generator: { model: `${SD_TURBO.name} (${SD_TURBO.revision.slice(0, 7)})`, prompt: shots[i]!.imagePrompt },
@@ -359,7 +370,7 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
                 badge={canGenerate ? 'SD-Turbo · ready' : imageModelReady === false ? 'Model not downloaded' : webgpu ? 'Not supported here' : 'Checking…'}
                 description={
                   canGenerate
-                    ? 'A new 512×512 picture for every shot, made on your GPU. Prompts never leave this device.'
+                    ? `A new ${generationSize(project.aspectRatio).width}×${generationSize(project.aspectRatio).height} picture for every shot, made on your GPU. Prompts never leave this device.`
                     : webgpu
                       ? `Needs WebGPU with half-precision support: ${webgpu}`
                       : 'Needs the optional SD-Turbo model (2.3 GB, one-time download).'
@@ -391,6 +402,34 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
                 testId="source-designed"
               />
             </fieldset>
+
+            {source === 'generate' && upscaleModel.status !== 'unsupported' ? (
+              <div className="grid gap-2 rounded-lg border p-2.5">
+                <SwitchField
+                  label="Sharper pictures (×2)"
+                  hint="Doubles each generated picture's resolution on your GPU (a few seconds per picture), so close-ups stay crisp."
+                  checked={sharpen}
+                  onChange={setSharpen}
+                  testId="prompt-sharpen"
+                />
+                {sharpen && upscaleModel.status === 'absent' ? (
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                    Needs the sharpening model (RealPLKSR, MIT — {formatBytes(UPSCALE_BYTES)}), downloaded once from huggingface.co.
+                    <Button size="xs" variant="secondary" onClick={() => void upscaleModel.download()} data-testid="prompt-sharpen-download">
+                      <Download /> Download
+                    </Button>
+                  </div>
+                ) : null}
+                {sharpen && upscaleModel.status === 'downloading' ? (
+                  <div className="grid gap-1">
+                    <Progress value={upscaleModel.total ? (upscaleModel.loaded / upscaleModel.total) * 100 : 0} />
+                    <span className="text-[11px] text-muted-foreground tabular">
+                      Downloading sharpening model · {formatBytes(upscaleModel.loaded)} of {formatBytes(upscaleModel.total)}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             {usesPictures ? (
               <div className="grid gap-2 rounded-lg border p-2.5">
@@ -547,7 +586,13 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
           ) : (
             <Button
               onClick={() => void build()}
-              disabled={!plan || (source === 'generate' && !canGenerate) || depthModel.status === 'downloading' || cutoutModels.status === 'downloading'}
+              disabled={
+                !plan ||
+                (source === 'generate' && !canGenerate) ||
+                depthModel.status === 'downloading' ||
+                cutoutModels.status === 'downloading' ||
+                upscaleModel.status === 'downloading'
+              }
               data-testid="prompt-create"
             >
               {source === 'generate' ? <Sparkles /> : <Wand2 />} Create video
