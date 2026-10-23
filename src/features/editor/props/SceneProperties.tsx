@@ -30,6 +30,7 @@ import { useEditorStore, useProject } from '@/state/editorStore'
 import { ColorField, Field, NumberField, SegmentedField, SelectField, Section, SliderField, SwitchField } from '../fields'
 import { LookSection, MotionControls } from './CinematicControls'
 import { OverlayEditor } from './OverlayEditor'
+import { WorldControls } from './WorldControls'
 import { MOTION_OPTIONS, TEXT_PRESETS, TRANSITION_OPTIONS, useSceneUpdate } from './shared'
 
 const EASING_OPTIONS: { value: Easing; label: string }[] = [
@@ -147,6 +148,11 @@ export function SceneProperties({ sceneId, overlayId }: { sceneId: string; overl
         </Field>
       </div>
 
+      {bg.kind === 'world' ? (
+        <Section title="3D scene">
+          <WorldControls scene={scene} bg={bg} />
+        </Section>
+      ) : (
       <Section title="Background">
         <div className="flex items-center gap-2">
           <div
@@ -319,7 +325,9 @@ export function SceneProperties({ sceneId, overlayId }: { sceneId: string; overl
           </>
         )}
       </Section>
+      )}
 
+      {bg.kind === 'world' ? null : (
       <Section title="Motion">
         {bg.kind === 'generated' ? (
           <p className="text-[11px] text-muted-foreground">Generated backgrounds animate on their own. Camera motion applies to images and video.</p>
@@ -356,6 +364,7 @@ export function SceneProperties({ sceneId, overlayId }: { sceneId: string; overl
           </>
         )}
       </Section>
+      )}
 
       <LookSection scene={scene} />
 

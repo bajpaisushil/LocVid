@@ -68,7 +68,38 @@ const generatedBackgroundSchema = z.object({
   seed: z.number().int().catch(1),
 })
 
-const backgroundSchema = z.discriminatedUnion('kind', [mediaBackgroundSchema, generatedBackgroundSchema])
+const castSchema = z.object({
+  kind: enumOf(['boy', 'girl', 'man', 'woman', 'dog'], 'boy'),
+  look: z.number().int().catch(1),
+})
+
+const worldSpecSchema = z.object({
+  seed: z.number().int().catch(1),
+  place: enumOf(['village', 'park', 'beach', 'city', 'snow'], 'village'),
+  time: enumOf(['morning', 'day', 'sunset', 'night'], 'day'),
+  weather: enumOf(['clear', 'rain', 'snow'], 'clear'),
+  activity: enumOf(['football', 'run', 'walk', 'dance', 'jump'], 'walk'),
+  cast: z.array(castSchema).min(1).max(8).catch([{ kind: 'boy', look: 1 }]),
+  beats: z
+    .array(
+      z.object({
+        action: enumOf(['dribble', 'run', 'walk', 'idle', 'kick', 'celebrate', 'dance', 'jump'], 'walk'),
+        duration: num(0.5, 300, 4),
+      }),
+    )
+    .min(1)
+    .max(60)
+    .catch([{ action: 'walk', duration: 6 }]),
+})
+
+const worldBackgroundSchema = z.object({
+  kind: z.literal('world'),
+  world: worldSpecSchema,
+  shot: enumOf(['establishing', 'tracking', 'closeup', 'low', 'orbit', 'aerial', 'detail', 'wide', 'pullback'], 'wide'),
+  start: num(0, 24 * 3600, 0),
+})
+
+const backgroundSchema = z.discriminatedUnion('kind', [mediaBackgroundSchema, generatedBackgroundSchema, worldBackgroundSchema])
 
 const motionSchema = z
   .object({

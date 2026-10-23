@@ -18,7 +18,8 @@ import { createAudioTrack, createGeneratedBackground, createOverlay, createScene
 import { applyStoryboard } from '@/core/operations'
 import { atmosphereForPrompt, directShot, directSubject, facingFor, framingCrop, lookForStyle, propsForShot, trackingCamera } from '@/core/storyboard/direction'
 import { planVideo, STYLE_LABELS, type PlannedShot, type VisualStyle } from '@/core/storyboard/promptPlan'
-import type { AssetMeta, GeneratedStyle, PropKind, Scene, SubjectAction } from '@/core/types'
+import { planWorld } from '@/world/director'
+import type { AssetMeta, CastMember, GeneratedStyle, PropKind, Scene, SubjectAction, WorldAction, WorldPlace, WorldShot, WorldTimeOfDay } from '@/core/types'
 import { errorMessage } from '@/lib/errors'
 import { formatBytes } from '@/lib/format'
 import { hashString } from '@/lib/id'
@@ -29,11 +30,12 @@ import { UPSCALE_BYTES, useUpscaleModel } from '@/features/ai/upscaleModelStore'
 import { getPreviewEngine } from '@/features/editor/previewRegistry'
 import type { DepthAnalysis } from '@/storage/db'
 import { useEditorStore, useProject } from '@/state/editorStore'
+import { createWorldVideo } from './worldVideo'
 import { usePlaybackStore } from '@/state/playbackStore'
 import { SegmentedField, SelectField, SwitchField } from '../editor/fields'
 import { importIntoProject } from '../editor/mediaImport'
 
-type Source = 'clips' | 'generate' | 'imported' | 'designed'
+type Source = 'world' | 'clips' | 'generate' | 'imported' | 'designed'
 
 const DESIGNED_STYLES: GeneratedStyle[] = ['aurora', 'bokeh', 'radial', 'waves', 'particles', 'linear', 'grid']
 
@@ -46,6 +48,36 @@ const PROP_ICON: Record<PropKind, string> = {
   petals: '🌸',
   leaves: '🍂',
   lanterns: '🏮',
+}
+
+const WORLD_PLACE: Record<WorldPlace, string> = { village: 'Village', park: 'Park', beach: 'Beach', city: 'City plaza', snow: 'Snowy village' }
+const WORLD_TIME: Record<WorldTimeOfDay, string> = { morning: 'morning', day: 'midday', sunset: 'sunset', night: 'night' }
+const WORLD_SHOT: Record<WorldShot, string> = {
+  establishing: 'establishing crane',
+  tracking: 'tracking',
+  closeup: 'close-up',
+  low: 'low angle',
+  orbit: 'orbit',
+  aerial: 'aerial',
+  detail: 'ground-level detail',
+  wide: 'wide',
+  pullback: 'pull back',
+}
+const WORLD_ACTION: Record<WorldAction, string> = {
+  dribble: 'dribbling',
+  run: 'running',
+  walk: 'walking',
+  idle: 'looking around',
+  kick: 'shoots!',
+  celebrate: 'celebrating',
+  dance: 'dancing',
+  jump: 'jumping',
+}
+
+function castSummary(cast: CastMember[]): string {
+  const people = cast.filter((c) => c.kind !== 'dog').length
+  const dog = cast.some((c) => c.kind === 'dog')
+  return `${people} ${people === 1 ? 'character' : 'characters'}${dog ? ' and a dog' : ''}`
 }
 
 const ACTION_LABEL: Record<SubjectAction, string> = {
@@ -85,7 +117,7 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
   const [prompt, setPrompt] = useState(initialPrompt)
   const [length, setLength] = useState('30')
   const [style, setStyle] = useState<VisualStyle>('cinematic')
-  const [source, setSource] = useState<Source>('designed')
+  const [source, setSource] = useState<Source>('world')
   const [cinematic, setCinematic] = useState(true)
   const [life, setLife] = useState(true)
   const [sharpen, setSharpen] = useState(true)
@@ -120,9 +152,10 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
       setWebgpu(caps.webgpu.available && caps.webgpu.shaderF16 ? null : (caps.webgpu.reason ?? 'This GPU lacks shader-f16 support.'))
       setImageModelReady(ready)
       setClipModel(clips)
-      if (clips) setSource('clips')
-      else if (ready && caps.webgpu.available) setSource('generate')
-      else if (pictures.length) setSource('imported')
+      // Your own photos first; otherwise live 3D (real motion, instant).
+      if (pictures.length) setSource('imported')
+      else if (clips) setSource('clips')
+      else setSource('world')
     })()
     return () => {
       alive = false
@@ -132,6 +165,7 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
   }, [open])
 
   const plan = useMemo(() => (prompt.trim() ? planVideo(prompt, { length: Number(length), style }) : null), [prompt, length, style])
+  const worldPlan = useMemo(() => (prompt.trim() ? planWorld(prompt, Number(length)) : null), [prompt, length])
   const shots = useMemo(() => plan?.shots.map((s, i) => ({ ...s, ...edits[i] })) ?? [], [plan, edits])
   const running = progress !== null
   const canGenerate = imageModelReady === true && webgpu === null
@@ -142,6 +176,16 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
 
   const build = async () => {
     if (!plan || !shots.length) return
+    if (source === 'world') {
+      // Live 3D: instant, and it starts playing.
+      const made = createWorldVideo(prompt, { length: Number(length), mode, captions, music: audios.find((a) => a.id === music), autoplay: true })
+      toast.success(`Playing: ${made.title}`, {
+        description: `${made.shots.length} shots of one live 3D scene. Change any shot on the timeline, then Export.`,
+        action: { label: 'Undo', onClick: () => useEditorStore.getState().undo() },
+      })
+      onOpenChange(false)
+      return
+    }
     cancelled.current = false
     const start = mode === 'append' ? project.scenes.length : 0
     const metas: (AssetMeta | undefined)[] = []
@@ -336,12 +380,16 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
                 ]}
                 onChange={setLength}
               />
-              <SelectField<VisualStyle>
-                label="Look"
-                value={style}
-                options={(Object.keys(STYLE_LABELS) as VisualStyle[]).map((v) => ({ value: v, label: STYLE_LABELS[v] }))}
-                onChange={setStyle}
-              />
+              {source === 'world' ? (
+                <div />
+              ) : (
+                <SelectField<VisualStyle>
+                  label="Look"
+                  value={style}
+                  options={(Object.keys(STYLE_LABELS) as VisualStyle[]).map((v) => ({ value: v, label: STYLE_LABELS[v] }))}
+                  onChange={setStyle}
+                />
+              )}
               <SelectField<string>
                 label="Music"
                 value={music}
@@ -351,7 +399,15 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
             </div>
 
             <fieldset className="grid gap-2" disabled={running}>
-              <legend className="mb-1 text-xs text-muted-foreground">Pictures for each shot</legend>
+              <legend className="mb-1 text-xs text-muted-foreground">How to make it</legend>
+              <SourceOption
+                active={source === 'world'}
+                onSelect={() => setSource('world')}
+                title="Live 3D animation"
+                badge="Instant · no download"
+                description="Characters in a 3D place really move — run, play, kick, dance — filmed with real camera shots, rendered live on this device."
+                testId="source-world"
+              />
               {clipModel ? (
                 <SourceOption
                   active={source === 'clips'}
@@ -488,7 +544,31 @@ export function PromptToVideoDialog({ open, onOpenChange, initialPrompt = '', on
             ) : null}
             <SwitchField label="Captions" hint="On-screen text for each shot (off = visuals only)." checked={captions} onChange={setCaptions} testId="prompt-captions" />
 
-            {plan ? (
+            {source === 'world' && worldPlan ? (
+              <section className="grid gap-2">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Shot plan</span>
+                  <span data-testid="world-summary">
+                    {WORLD_PLACE[worldPlan.world.place]} · {WORLD_TIME[worldPlan.world.time]} · {castSummary(worldPlan.world.cast)} ·{' '}
+                    {worldPlan.shots.length} shots · {Math.round(worldPlan.shots.reduce((t, s) => t + s.duration, 0))} s
+                  </span>
+                </div>
+                <ol className="grid gap-1.5" data-testid="prompt-shots">
+                  {worldPlan.shots.map((shot, i) => (
+                    <li key={i} className="flex flex-wrap items-center gap-1.5 rounded-md border p-2 text-xs">
+                      <span className="w-4 font-semibold text-muted-foreground tabular">{i + 1}</span>
+                      <span className="font-medium">{shot.title}</span>
+                      <Badge variant="secondary" className="font-normal">
+                        {WORLD_SHOT[shot.shot]}
+                      </Badge>
+                      <Badge variant="outline" className="font-normal" data-testid="world-action">
+                        {WORLD_ACTION[shot.action]}
+                      </Badge>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : plan ? (
               <section className="grid gap-2">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="font-medium text-foreground">Shot plan</span>

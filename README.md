@@ -1,18 +1,24 @@
 # LocVid
 
-A video studio that runs entirely in your browser. Import photos, clips and audio — or just describe the video you want — and LocVid
-turns them into an edited, moving video and exports a real MP4 (H.264 + AAC). There is no server, no account and no upload: projects,
-media and rendering stay on your device. Optional AI models run on your own GPU/CPU and are downloaded only when you ask.
+A video studio that runs entirely in your browser. Type a sentence like *"create video of a village boy playing"* and LocVid builds a
+live 3D scene — a village, kids who actually run, dribble, shoot and celebrate — films it with real camera shots, and starts playing it
+right away. Or import photos, clips and audio and turn them into an edited, moving video. Everything exports as a real MP4 (H.264 + AAC).
+There is no server, no account and no upload: projects, media and rendering stay on your device. Optional AI models run on your own
+GPU/CPU and are downloaded only when you ask.
 
 ## What it does
 
+- **Live 3D videos from a sentence** — no download, no waiting. LocVid reads the place (village, park, beach, city plaza, snowy village),
+  the time of day, the weather, who is in it and what they do (playing football, running, walking, dancing, jumping) and builds that
+  world with three.js: toon-shaded characters with jointed bodies whose legs and arms really move, a ball with real rolling, bounces and
+  a shot into the net, friends who join in, a goalkeeper who dives. The story is filmed like footage — establishing crane, close-up,
+  tracking alongside, ground-level footwork, low-angle shot, orbit, aerial, pull-back — and cut together on the timeline. It starts
+  playing as soon as you press Start. Every shot of a video films the same continuous story, so the same characters appear throughout.
 - **Editor** — projects (create, reopen, rename, delete), a media bin (images, video, audio; duplicates are stored once), a timeline of
   scenes with drag-to-reorder, text overlays, transitions, background music/narration with ducking, undo/redo and autosave.
   16:9, 9:16 and 1:1 output.
-- **Describe your video** — type a sentence such as *"create a video showing chhota bheem playing football in a village"*. LocVid plans a
-  shot list (wide, close-up, action, the moment, details, finale…), picks a picture for each shot (your photos, pictures generated on your
-  device, or designed backgrounds), frames them differently, and directs each shot: a camera move, what the subject does, props and a film look.
-  Visuals first — captions are optional.
+- **Describe your video** — the same sentence can instead *film your photos* (each shot framed differently, with a camera move, the subject
+  acting and props) or use pictures generated on your device. Visuals first — captions are optional.
 - **Cinematic 3D motion** — an on-device depth model turns a still into a depth map; a WebGL renderer (three.js) moves a virtual camera
   *through* it — dolly, orbit, crane, track, hand-held float, dolly-zoom — with real parallax, occlusion and a painted-in background for
   revealed areas, plus drifting sky, swaying foliage, depth haze, depth of field with rack focus, bloom, grain and cinema bars.
@@ -98,7 +104,8 @@ their WebGPU support.
 - Up to 5 minutes per video; 720p or 1080p; H.264 video with AAC audio in MP4.
 - 1080p and long videos need more memory; if the browser runs out, export at 720p or use the FFmpeg engine.
 - Video backgrounds play as clips (no depth effects); cinematic 3D applies to still pictures.
-- Subjects move as a whole (they lean, bend, squash and stretch, travel, jump) — arms and legs don't articulate.
+- In photo-based shots, subjects move as a whole (they lean, bend, squash and stretch, travel, jump); live 3D characters have fully
+  jointed bodies but a stylized cartoon look, and are generic characters (they don't reproduce specific people or named characters).
 
 ## What "AI video" means here (and Level 3 research)
 
@@ -129,15 +136,14 @@ LOCVID_E2E_MODEL=1 LOCVID_E2E_PROFILE=~/.locvid-e2e npx playwright test e2e/cine
                                    # opt-in: real model downloads (~2.8 GB, cached in the profile) and inference
 ```
 
-Results on 21 October 2026 (Chrome 155, macOS 26, Apple M4):
+Results on 23 October 2026 (Chrome 155, macOS 26, Apple M4):
 
-- Unit tests (Vitest): **156 passed**.
-- End-to-end (Playwright): **22 passed**; 3 opt-in model tests skipped by default.
-- Opt-in model tests, with fresh downloads: **3 passed** — depth model + moving camera + export; cut-out models + a subject that moves
-  while the background stays identical + football + export; SD-Turbo download and generation on WebGPU in the video's shape (768×448)
-  and square (512×512).
-- A full no-photos run of *Describe your video* (4 shots: SD-Turbo pictures, ×2 sharpening, depth, cut-outs, subject actions, props)
-  took 79 s to create and 2 s to export at 720p.
+- Unit tests (Vitest): **168 passed**.
+- End-to-end (Playwright): **24 passed**; 3 opt-in model tests skipped by default. They include: a home-screen prompt becomes a live 3D
+  video that plays by itself and visibly changes frame to frame; the 3D video exports as moving footage with a clean decode.
+- Opt-in model tests: **3 passed** — depth model + moving camera + export; cut-out models + a subject that moves while the background
+  stays identical + football + export; SD-Turbo download and generation on WebGPU in the video's shape (768×448) and square (512×512).
+- *"create video of a village boy playing"*: 7 shots on the timeline 0.8 s after pressing Start; the 30-second 720p export took 4.6 s.
 - Exports are verified with `ffprobe`/`ffmpeg` when available (codecs, frame counts, clean decode, colors, audio levels).
 
 ## Deploying for free (static hosting)
@@ -192,6 +198,7 @@ special headers are needed.
 src/
   core/        project model, schema (versioned, validated), timeline, storyboard + prompt direction
   render/      the shared compositor; cinematic/ = three.js renderer, camera, subject animation, props, shaders
+  world/       live 3D videos: prompt director, choreography (the story as motion), characters, places, sky, camera rigs, renderer
   ai/          model manifests and downloads, vision workers (depth, cut-out), SD-Turbo, video-model adapter point
   preview/     real-time preview engine
   export/      WebCodecs and FFmpeg pipelines (in a worker), audio mixdown

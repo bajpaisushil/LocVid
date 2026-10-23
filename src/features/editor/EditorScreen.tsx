@@ -1,5 +1,6 @@
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { navigate } from '@/app/router'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -10,6 +11,7 @@ import { getAssets, getProject, savePoster } from '@/storage/repo'
 import { AssetPanel } from './AssetPanel'
 import { startAutosave } from './autosave'
 import { takePendingPrompt } from '@/features/prompt/pendingPrompt'
+import { createWorldVideo } from '@/features/prompt/worldVideo'
 import { importIntoProject } from './mediaImport'
 import { PreviewPanel } from './PreviewPanel'
 import { getPreviewEngine } from './previewRegistry'
@@ -109,9 +111,23 @@ function usePosterUpdates(projectId: string) {
 type DialogName = 'prompt' | 'storyboard' | 'export' | 'ai' | 'ai-images'
 
 function EditorWorkspace({ projectId }: { projectId: string }) {
-  // A prompt typed on the home screen opens straight into "Describe your video".
   const [initialPrompt] = useState(() => takePendingPrompt(projectId))
-  const [dialog, setDialog] = useState<DialogName | null>(initialPrompt ? 'prompt' : null)
+  const [dialog, setDialog] = useState<DialogName | null>(null)
+  // A prompt typed on the home screen becomes a live 3D video right away — and starts playing.
+  const started = useRef(false)
+  useEffect(() => {
+    if (!initialPrompt || started.current) return
+    started.current = true
+    try {
+      const plan = createWorldVideo(initialPrompt, { length: 30, mode: 'replace', autoplay: true })
+      toast.success(`Playing: ${plan.title}`, {
+        description: `${plan.shots.length} shots of one live 3D scene, made on this device. Change any shot, or describe it differently.`,
+        action: { label: 'Adjust', onClick: () => setDialog('prompt') },
+      })
+    } catch (error) {
+      toast.error('Could not create the video', { description: errorMessage(error), action: { label: 'Describe it', onClick: () => setDialog('prompt') } })
+    }
+  }, [initialPrompt])
   const [fileDrag, setFileDrag] = useState(false)
   useEditorShortcuts(dialog === null)
   usePosterUpdates(projectId)

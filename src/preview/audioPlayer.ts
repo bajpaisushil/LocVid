@@ -39,11 +39,9 @@ export class PreviewAudio {
       this.master = createMasterBus(this.ctx)
     }
     if (this.ctx.state !== 'running') {
-      try {
-        await this.ctx.resume()
-      } catch {
-        // Autoplay blocked: picture still plays, driven by the fallback clock.
-      }
+      // Without a recent user gesture `resume()` stays pending until one happens; don't hold the
+      // picture back for it — it plays on the fallback clock and the audio joins when allowed.
+      await Promise.race([this.ctx.resume().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 150))])
     }
     this.playing = true
     this.reschedule(time)

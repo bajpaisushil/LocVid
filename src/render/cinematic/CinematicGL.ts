@@ -299,6 +299,8 @@ export class CinematicGL {
   private readonly depths = new TextureCache<DepthTextures>(8)
   private readonly cutouts = new TextureCache<CutoutTextures>(4)
   private readonly flat: Texture
+  /** Size of the picture last uploaded into `flat` (its GPU storage is fixed at that size). */
+  private flatSize = { width: 0, height: 0 }
   /** 1×1 black: "no clean plate here". */
   private readonly none: DataTexture
   private readonly actorColor: RawShaderMaterial
@@ -779,6 +781,14 @@ export class CinematicGL {
   renderLook(input: LookInput): AnyCanvas {
     const { width, height } = input
     this.ensureSize(width, height)
+    // GPU texture storage is allocated once at the first upload's size: when the picture's
+    // size changes (e.g. the preview resized), free it so the next upload reallocates —
+    // otherwise every later upload fails and the look keeps showing the first frame.
+    const { width: sw, height: sh } = input.source as { width: number; height: number }
+    if (sw !== this.flatSize.width || sh !== this.flatSize.height) {
+      this.flat.dispose()
+      this.flatSize = { width: sw, height: sh }
+    }
     this.flat.image = input.source as never
     this.flat.needsUpdate = true
     this.mats.copy.uniforms.uSource!.value = this.flat

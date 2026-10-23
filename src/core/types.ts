@@ -109,7 +109,57 @@ export interface GeneratedBackground {
   seed: number
 }
 
-export type SceneBackground = MediaBackground | GeneratedBackground
+/**
+ * Live 3D scenes ("worlds"): a place built procedurally on the device, with
+ * characters that actually move — run, dribble, kick, dance — filmed by a
+ * virtual camera. Every shot of one video shares the same world and story;
+ * each films a different moment of it with its own camera, like an edit of
+ * continuous footage.
+ */
+export type WorldPlace = 'village' | 'park' | 'beach' | 'city' | 'snow'
+export type WorldTimeOfDay = 'morning' | 'day' | 'sunset' | 'night'
+export type WorldWeather = 'clear' | 'rain' | 'snow'
+export type WorldActivity = 'football' | 'run' | 'walk' | 'dance' | 'jump'
+export type CastKind = 'boy' | 'girl' | 'man' | 'woman' | 'dog'
+
+export interface CastMember {
+  kind: CastKind
+  /** Seed for colors and small differences (hair, clothes, height). */
+  look: number
+}
+
+/** What the hero does next in the story. */
+export type WorldAction = 'dribble' | 'run' | 'walk' | 'idle' | 'kick' | 'celebrate' | 'dance' | 'jump'
+
+export interface WorldBeat {
+  action: WorldAction
+  /** Seconds. */
+  duration: number
+}
+
+export interface WorldSpec {
+  seed: number
+  place: WorldPlace
+  time: WorldTimeOfDay
+  weather: WorldWeather
+  activity: WorldActivity
+  /** cast[0] is the hero; the rest are friends (and pets) around them. */
+  cast: CastMember[]
+  /** The hero's story, in order; shots film parts of it. */
+  beats: WorldBeat[]
+}
+
+export type WorldShot = 'establishing' | 'tracking' | 'closeup' | 'low' | 'orbit' | 'aerial' | 'detail' | 'wide' | 'pullback'
+
+export interface WorldBackground {
+  kind: 'world'
+  world: WorldSpec
+  shot: WorldShot
+  /** Seconds into the story where this shot begins. */
+  start: number
+}
+
+export type SceneBackground = MediaBackground | GeneratedBackground | WorldBackground
 
 export type MotionPreset =
   | 'none'

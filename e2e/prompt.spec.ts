@@ -1,26 +1,79 @@
 import { expect, test } from '@playwright/test'
 import { createProject, fixture, importMedia, sampleCanvas } from './helpers.ts'
 
-test('describe a video on the home screen → shots on the timeline, visuals only by default', async ({ page }) => {
+/** A cheap fingerprint of what the preview shows right now. */
+function previewSignature(page: import('@playwright/test').Page): Promise<number> {
+  return page.getByTestId('preview-canvas').evaluate((canvas: HTMLCanvasElement) => {
+    const small = document.createElement('canvas')
+    small.width = 48
+    small.height = 27
+    const ctx = small.getContext('2d', { willReadFrequently: true })!
+    ctx.drawImage(canvas, 0, 0, 48, 27)
+    let h = 0
+    for (const v of ctx.getImageData(0, 0, 48, 27).data) h = (h * 31 + v) >>> 0
+    return h
+  })
+}
+
+test('a prompt on the home screen becomes a live 3D video that plays right away', async ({ page }) => {
   await page.goto('/')
-  await page.getByTestId('home-prompt').fill('create a video showing a boy playing football in a village')
+  await page.getByTestId('home-prompt').fill('create video of a village boy playing')
   await page.getByTestId('home-prompt-go').click()
-  await expect(page.getByTestId('prompt-dialog')).toBeVisible()
-  await expect(page.getByTestId('prompt-input')).toHaveValue('create a video showing a boy playing football in a village')
-  await expect(page.getByTestId('project-name')).toHaveText('A boy playing football in a village')
-  // No pictures yet → designed backgrounds; captions are off by default.
-  await expect(page.getByTestId('source-designed')).toHaveAttribute('aria-checked', 'true')
-  await expect(page.getByTestId('prompt-captions')).toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByTestId('prompt-shots').locator('li')).toHaveCount(7)
+  // No dialog to click through: the shots land on the timeline and start playing.
+  await expect(page.getByTestId('scene-block')).toHaveCount(7)
+  await expect(page.getByTestId('prompt-dialog')).toHaveCount(0)
+  await expect(page.getByTestId('project-name')).toHaveText('A village boy playing')
+  await expect(page.getByTestId('timeline-summary')).toContainText('0:30')
+  await expect.poll(async () => (await page.getByTestId('time-readout').textContent()) ?? '', { timeout: 10_000 }).not.toMatch(/^0:00\.0/)
+  // The picture really moves: the preview changes from moment to moment.
+  const a = await previewSignature(page)
+  await page.waitForTimeout(800)
+  const b = await previewSignature(page)
+  expect(a).not.toBe(b)
+  // It's live 3D (visuals only, no text), with shot controls in the panel.
+  await page.getByTestId('play-toggle').click()
+  await page.getByTestId('scene-block').first().click()
+  await expect(page.getByTestId('world-controls')).toBeVisible()
+  await expect(page.getByTestId('overlay-item')).toHaveCount(0)
+})
+
+test('"Describe your video" defaults to live 3D without photos, and plays what it makes', async ({ page }) => {
+  await createProject(page, 'Dance')
+  await page.getByTestId('open-prompt').click()
+  await page.getByTestId('prompt-input').fill('a girl dancing in the park at sunset')
+  await expect(page.getByTestId('source-world')).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByTestId('world-summary')).toContainText('Park · sunset')
+  await expect(page.getByTestId('world-action').first()).toContainText('dancing')
+  await page.getByText('15 s', { exact: true }).click()
   await page.getByTestId('prompt-create').click()
   await expect(page.getByTestId('prompt-dialog')).toBeHidden()
+  await expect(page.getByTestId('scene-block')).toHaveCount(4)
+  await expect.poll(async () => (await page.getByTestId('time-readout').textContent()) ?? '', { timeout: 10_000 }).not.toMatch(/^0:00\.0/)
+})
+
+test('a live 3D video exports as moving footage', async ({ page }, info) => {
+  await page.goto('/')
+  await page.getByTestId('home-prompt').fill('kids playing football in a village')
+  await page.getByTestId('home-prompt-go').click()
   await expect(page.getByTestId('scene-block')).toHaveCount(7)
-  await expect(page.getByTestId('timeline-summary')).toContainText('0:30')
-  // Visual-first: no text overlays were added.
-  await page.getByTestId('scene-block').first().click()
-  await expect(page.getByTestId('overlay-item')).toHaveCount(0)
-  // The preview lands inside the first shot, not on the black start of the fade-in.
-  await expect.poll(async () => (await sampleCanvas(page, 0.5, 0.5, 0.3)).reduce((a, b) => a + b, 0)).toBeGreaterThan(60)
+  await page.getByTestId('play-toggle').click()
+  await page.getByTestId('open-export').click()
+  await page.getByTestId('engine-webcodecs').click()
+  const download = page.waitForEvent('download')
+  await page.getByTestId('start-export').click()
+  await expect(page.getByTestId('export-done')).toBeVisible({ timeout: 180_000 })
+  await expect(page.getByTestId('export-done')).not.toContainText('2D')
+  const out = info.outputPath('world.mp4')
+  await (await download).saveAs(out)
+  const { decodeErrors, ffprobe, frameColor, hasFfprobe } = await import('./helpers.ts')
+  if (hasFfprobe) {
+    expect(decodeErrors(out)).toBe('')
+    expect(ffprobe(out).streams.some((s) => s.codec_name === 'h264')).toBe(true)
+    // Different moments of the story look different (the camera and the characters move).
+    const early = frameColor(out, 2, '200:200:540:260')
+    const later = frameColor(out, 14, '200:200:540:260')
+    expect(Math.max(...early.map((v, i) => Math.abs(v - later[i]!)))).toBeGreaterThan(4)
+  }
 })
 
 test('one photo becomes several differently framed shots', async ({ page }) => {

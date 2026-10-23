@@ -9,6 +9,7 @@ import { drawGenerated } from './generated'
 import { cameraAt as cinematicCamera, focusAt } from './cinematic/camera'
 import { CinematicGL, usableCutout } from './cinematic/CinematicGL'
 import { applyCamera, cameraAt, parallaxCameras, type Camera } from './motion'
+import { WorldRenderer } from '@/world/WorldRenderer'
 import { drawOverlay } from './text'
 import { get2d, type AnyCanvas, type CanvasFactory, type Ctx2D, type FrameSources, type SourceImage } from './types'
 
@@ -44,6 +45,8 @@ export class Compositor {
   private readonly allowCinematic: boolean
   /** undefined = not created yet; null = WebGL2 unavailable (2D fallback). */
   private gl: CinematicGL | null | undefined
+  /** Live 3D worlds; undefined = not created yet; null = WebGL2 unavailable. */
+  private worldGL: WorldRenderer | null | undefined
   /** True once a cinematic effect had to fall back to 2D (reported as an export warning). */
   cinematicFallback = false
 
@@ -57,6 +60,13 @@ export class Compositor {
     if (this.gl === undefined) this.gl = CinematicGL.create(this.createCanvas)
     if (this.gl && !this.gl.available) this.gl = null
     return this.gl
+  }
+
+  private worlds(): WorldRenderer | null {
+    if (!this.allowCinematic) return null
+    if (this.worldGL === undefined) this.worldGL = WorldRenderer.create(this.createCanvas)
+    if (this.worldGL && !this.worldGL.available) this.worldGL = null
+    return this.worldGL
   }
 
   private layer(index: number, w: number, h: number): Ctx2D {
@@ -83,6 +93,8 @@ export class Compositor {
   dispose(): void {
     this.gl?.dispose()
     this.gl = undefined
+    this.worldGL?.dispose()
+    this.worldGL = undefined
     for (const [canvas] of this.layers) {
       canvas.width = 0
       canvas.height = 0
@@ -138,6 +150,16 @@ export class Compositor {
     let lookDone = false
     if (bg.kind === 'generated') {
       drawGenerated(ctx, bg, w, h, sceneTime)
+    } else if (bg.kind === 'world') {
+      // A live 3D shot: the world's story filmed by this shot's camera.
+      const world = this.worlds()
+      if (world) {
+        world.render({ width: w, height: h, background: bg, time: Math.max(0, sceneTime), duration: scene.duration })
+        ctx.drawImage(world.canvas, 0, 0, w, h)
+      } else {
+        this.cinematicFallback = true
+        if (options.placeholders) drawPlaceholder(ctx, w, h)
+      }
     } else {
       const source = this.mediaFor(entry, bg, localTime, input.sources)
       const isImage = input.sources.videoDuration(bg.assetId) === undefined

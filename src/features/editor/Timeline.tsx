@@ -36,7 +36,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { buildAudioPlan } from '@/core/audioPlan'
-import { createGeneratedBackground, createOverlay, createScene, paletteFor } from '@/core/defaults'
+import { aspectValue, createGeneratedBackground, createOverlay, createScene, paletteFor } from '@/core/defaults'
 import { addScenes, moveScene, setSceneDuration, setSceneMedia } from '@/core/operations'
 import { buildTimeline, type TimelineEntry } from '@/core/timeline'
 import type { AssetMeta, Scene } from '@/core/types'
@@ -48,6 +48,7 @@ import { useEditorStore, useProject, type AssetEntry } from '@/state/editorStore
 import { usePlaybackStore } from '@/state/playbackStore'
 import { ASSET_DRAG_TYPE } from './AssetPanel'
 import { sceneActions, seekToScene } from './sceneActions'
+import { useWorldThumbs, worldPlaceholder, worldThumb } from './worldThumbs'
 
 const LEFT_PAD = 12
 const DRAG_INSTRUCTIONS =
@@ -55,8 +56,12 @@ const DRAG_INSTRUCTIONS =
 const MIN_PX_PER_SEC = 6
 const MAX_PX_PER_SEC = 240
 
-function backgroundStyle(scene: Scene, assets: Record<string, AssetEntry>): React.CSSProperties {
+function backgroundStyle(scene: Scene, assets: Record<string, AssetEntry>, aspect: number): React.CSSProperties {
   const bg = scene.background
+  if (bg.kind === 'world') {
+    const thumb = worldThumb(bg, scene.duration, aspect)
+    return thumb ? { backgroundImage: `url(${thumb})`, backgroundSize: 'cover', backgroundPosition: 'center' } : { backgroundImage: worldPlaceholder(bg) }
+  }
   if (bg.kind === 'media') {
     const thumb = assets[bg.assetId]?.thumbnailUrl
     if (!thumb) return {}
@@ -284,6 +289,9 @@ function SceneBlock({
 }) {
   const { scene, index } = entry
   const selection = useEditorStore((s) => s.selection)
+  const aspect = aspectValue(useProject().aspectRatio)
+  // Re-render when a 3D shot's thumbnail finishes rendering.
+  useWorldThumbs((s) => s.version)
   const select = useEditorStore((s) => s.select)
   const apply = useEditorStore((s) => s.apply)
   const playheadInScene = usePlaybackStore((s) => s.time >= entry.start && s.time < entry.end)
@@ -371,7 +379,7 @@ function SceneBlock({
           dropping && 'ring-2 ring-emerald-400',
           'focus-visible:ring-3 focus-visible:ring-ring/60',
         )}
-        style={backgroundStyle(scene, assets)}
+        style={backgroundStyle(scene, assets, aspect)}
       >
         <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-transparent to-black/65" />
         {width > 36 ? (

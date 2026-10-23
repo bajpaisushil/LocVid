@@ -55,6 +55,43 @@ describe('project schema', () => {
     expect(restored.scenes[1]!.cinematic.props).toEqual(['football', 'birds'])
   })
 
+  it('saves and reopens live 3D shots, repairing damaged values', () => {
+    const project = sampleProject()
+    project.scenes[1]!.background = {
+      kind: 'world',
+      world: {
+        seed: 42,
+        place: 'village',
+        time: 'sunset',
+        weather: 'clear',
+        activity: 'football',
+        cast: [
+          { kind: 'boy', look: 7 },
+          { kind: 'dog', look: 9 },
+        ],
+        beats: [
+          { action: 'dribble', duration: 4 },
+          { action: 'kick', duration: 4 },
+        ],
+      },
+      shot: 'low',
+      start: 4,
+    }
+    const restored = parseProject(JSON.parse(serializeProject(project)))
+    expect(restored.scenes[1]!.background).toEqual(project.scenes[1]!.background)
+    const raw = JSON.parse(serializeProject(project))
+    raw.scenes[1].background.shot = 'drone-360'
+    raw.scenes[1].background.world.place = 'mars'
+    raw.scenes[1].background.world.beats = 'lots'
+    const repaired = parseProject(raw).scenes[1]!.background
+    expect(repaired.kind).toBe('world')
+    if (repaired.kind === 'world') {
+      expect(repaired.shot).toBe('wide')
+      expect(repaired.world.place).toBe('village')
+      expect(repaired.world.beats.length).toBeGreaterThan(0)
+    }
+  })
+
   it('falls back to defaults for unknown enum values', () => {
     const raw = JSON.parse(serializeProject(sampleProject()))
     raw.scenes[0].transition.type = 'spinny-cube'
